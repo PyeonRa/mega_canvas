@@ -1,20 +1,23 @@
 <script>
     import { onMount } from "svelte";
+    import { io } from "socket.io-client";
 
-    let { 
-        color = "#1e293b", 
-        brushSize = 5, 
-        mode = $bindable("draw"), 
-        username = "Guest", 
-        isVIP = false, 
-        isRainbow = false, 
+    let {
+        color = "#2563eb",
+        brushSize = 5,
+        mode = $bindable("draw"),
+        username = "Guest",
+        isVIP = false,
+        isRainbow = false,
         isGhost = false,
         mouseCoord = $bindable(null),
         pixelCount = $bindable(0),
-        onUsersUpdate
+        onUsersUpdate,
     } = $props();
 
-    const channel = new BroadcastChannel("canvas_sync");
+    // Multi-Device Sync (Socket.io)
+    let socket;
+    const channel = new BroadcastChannel("mega_canvas_v7");
     const CANVAS_SIZE = 5000;
 
     let canvas = $state();
@@ -23,12 +26,18 @@
     let isPanning = $state(false);
     let isDrawing = $state(false);
     let lastPos = $state({ x: 0, y: 0 });
-    let pinch = $state({ startDist: 0, startScale: 1 });
-    
+    let pinch = $state({
+        startDist: 0,
+        startScale: 1,
+        startMid: { x: 0, y: 0 },
+        startOffset: { x: 0, y: 0 },
+    });
+
     let strokes = $state([]);
     let ads = $state([]);
     let currentStroke = $state(null);
-    let remoteCursors = $state(new Map());
+    let remoteUsers = $state({});
+
     let particles = $state([]);
     let vipTrails = $state([]);
     let sparkles = $state([]);
@@ -40,22 +49,57 @@
     const imageCache = new Map();
 
     function isInBounds(x, y) {
-        return x >= -CANVAS_SIZE/2 && x <= CANVAS_SIZE/2 && 
-               y >= -CANVAS_SIZE/2 && y <= CANVAS_SIZE/2;
+        return (
+            x >= -CANVAS_SIZE / 2 &&
+            x <= CANVAS_SIZE / 2 &&
+            y >= -CANVAS_SIZE / 2 &&
+            y <= CANVAS_SIZE / 2
+        );
+    }
+
+    function getMargin() {
+        // Use 35% of viewport as margin, capped at 350px for desktop.
+        // This ensures canvas is visible even on small screens with toolbars.
+        return Math.min(
+            350,
+            Math.min(window.innerWidth, window.innerHeight) * 0.35,
+        );
     }
 
     function getMinScale() {
-        if (!canvas) return 0.1;
-        return Math.max(window.innerWidth, window.innerHeight) / CANVAS_SIZE;
+        if (!canvas) return 0.05;
+        const margin = getMargin();
+        const availableW = window.innerWidth - margin * 2;
+        const availableH = window.innerHeight - margin * 2;
+        // Calculate scale to fit canvas + double margin into the smaller dimension
+        return Math.min(availableW, availableH) / CANVAS_SIZE;
     }
 
     function clampTransform() {
         const minScale = getMinScale();
         if (transform.scale < minScale) transform.scale = minScale;
-        const limit = (CANVAS_SIZE / 2) * transform.scale;
-        const margin = 50;
-        transform.x = Math.max(window.innerWidth - limit - margin, Math.min(limit + margin, transform.x));
-        transform.y = Math.max(window.innerHeight - limit - margin, Math.min(limit + margin, transform.y));
+
+        const limitW = (CANVAS_SIZE / 2) * transform.scale;
+        const limitH = (CANVAS_SIZE / 2) * transform.scale;
+        const margin = getMargin();
+
+        // X-axis clamping
+        const minX = window.innerWidth - limitW - margin;
+        const maxX = limitW + margin;
+        if (minX > maxX) {
+            transform.x = window.innerWidth / 2; // Center if smaller than space
+        } else {
+            transform.x = Math.max(minX, Math.min(maxX, transform.x));
+        }
+
+        // Y-axis clamping
+        const minY = window.innerHeight - limitH - margin;
+        const maxY = limitH + margin;
+        if (minY > maxY) {
+            transform.y = window.innerHeight / 2; // Center if smaller than space
+        } else {
+            transform.y = Math.max(minY, Math.min(maxY, transform.y));
+        }
     }
 
     function getCanvasPos(e) {
@@ -64,7 +108,7 @@
         const rect = canvas.getBoundingClientRect();
         return {
             x: (clientX - rect.left - transform.x) / transform.scale,
-            y: (clientY - rect.top - transform.y) / transform.scale
+            y: (clientY - rect.top - transform.y) / transform.scale,
         };
     }
 
@@ -74,6 +118,11 @@
             const dy = e.touches[0].clientY - e.touches[1].clientY;
             pinch.startDist = Math.hypot(dx, dy);
             pinch.startScale = transform.scale;
+            pinch.startMid = {
+                x: (e.touches[0].clientX + e.touches[1].clientX) / 2,
+                y: (e.touches[0].clientY + e.touches[1].clientY) / 2,
+            };
+            pinch.startOffset = { x: transform.x, y: transform.y };
             return;
         }
 
@@ -81,11 +130,16 @@
         const clientX = e.touches ? e.touches[0].clientX : e.clientX;
         const clientY = e.touches ? e.touches[0].clientY : e.clientY;
 
-        if (e.button === 1 || (e.button === 0 && (mode === "pan" || mode === "nuke" || mode === "burst"))) {
+        if (
+            e.button === 1 ||
+            (e.button === 0 &&
+                (mode === "pan" || mode === "nuke" || mode === "burst")) ||
+            (e.touches && mode === "pan")
+        ) {
             if (mode === "nuke" || mode === "burst") {
                 if (mode === "nuke") triggerNuke(pos.x, pos.y);
                 else triggerBurst(pos.x, pos.y);
-                mode = "draw"; // Return to draw after use
+                mode = "draw";
                 return;
             }
             isPanning = true;
@@ -93,9 +147,16 @@
         } else if ((e.button === 0 || e.touches) && mode === "draw") {
             if (!isInBounds(pos.x, pos.y)) return;
             isDrawing = true;
-            currentStroke = { 
-                points: [pos], color, width: brushSize, id: Math.random(), 
-                username, isVIP, isRainbow, isGhost, timestamp: Date.now() 
+            currentStroke = {
+                points: [pos],
+                color: isRainbow ? `hsl(${rainbowHue}, 100%, 50%)` : color,
+                width: brushSize,
+                id: Math.random(),
+                username,
+                isVIP,
+                isRainbow,
+                isGhost,
+                timestamp: Date.now(),
             };
             strokes.push(currentStroke);
             sync("stroke_start", currentStroke);
@@ -103,30 +164,67 @@
     }
 
     function handlePointerMove(e) {
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
         if (e.touches && e.touches.length === 2) {
             const dx = e.touches[0].clientX - e.touches[1].clientX;
             const dy = e.touches[0].clientY - e.touches[1].clientY;
             const dist = Math.hypot(dx, dy);
-            const newScale = Math.min(Math.max(pinch.startScale * (dist / pinch.startDist), getMinScale()), 8);
+
+            // New Zoom Scale
+            const newScale = Math.min(
+                Math.max(
+                    pinch.startScale * (dist / pinch.startDist),
+                    getMinScale(),
+                ),
+                8,
+            );
+
+            // Current Midpoint (Panning)
             const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
             const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+
+            // Midpoint displacement
+            const moveX = midX - pinch.startMid.x;
+            const moveY = midY - pinch.startMid.y;
+
             const rect = canvas.getBoundingClientRect();
-            const centerX = midX - rect.left;
-            const centerY = midY - rect.top;
-            transform.x = centerX - (centerX - transform.x) * (newScale / transform.scale);
-            transform.y = centerY - (centerY - transform.y) * (newScale / transform.scale);
+            const centerX = pinch.startMid.x - rect.left;
+            const centerY = pinch.startMid.y - rect.top;
+
+            // Update transform with combined zoom & pan
+            // First apply the zoom around the initial midpoint
+            const zoomX =
+                centerX -
+                (centerX - pinch.startOffset.x) * (newScale / pinch.startScale);
+            const zoomY =
+                centerY -
+                (centerY - pinch.startOffset.y) * (newScale / pinch.startScale);
+
+            // Then add the displacement
             transform.scale = newScale;
+            transform.x = zoomX + moveX;
+            transform.y = zoomY + moveY;
+
             clampTransform();
             return;
         }
 
         const pos = getCanvasPos(e);
-        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-
         if (isInBounds(pos.x, pos.y)) {
             mouseCoord = { x: Math.round(pos.x), y: Math.round(pos.y) };
-            sync("cursor", { x: pos.x, y: pos.y, username, color, isDrawing, isVIP, isRainbow, isGhost });
+            sync("cursor", {
+                x: pos.x,
+                y: pos.y,
+                username,
+                color,
+                isDrawing,
+                isVIP,
+                isRainbow,
+                isGhost,
+                pixelCount,
+            });
             if (isVIP) spawnVIPTrial(pos.x, pos.y, "#fbbf24");
         } else {
             mouseCoord = null;
@@ -148,10 +246,7 @@
     }
 
     function handlePointerUp() {
-        if (isDrawing) {
-            save();
-            localStorage.setItem("pixel_count_v3", pixelCount.toString());
-        }
+        if (isDrawing) save();
         isPanning = false;
         isDrawing = false;
         currentStroke = null;
@@ -160,261 +255,487 @@
     function handleWheel(e) {
         e.preventDefault();
         const factor = e.deltaY > 0 ? 0.9 : 1.1;
-        const newScale = Math.min(Math.max(transform.scale * factor, getMinScale()), 8);
+        const newScale = Math.min(
+            Math.max(transform.scale * factor, getMinScale()),
+            8,
+        );
         const rect = canvas.getBoundingClientRect();
         const mouseX = e.clientX - rect.left;
         const mouseY = e.clientY - rect.top;
-        transform.x = mouseX - (mouseX - transform.x) * (newScale / transform.scale);
-        transform.y = mouseY - (mouseY - transform.y) * (newScale / transform.scale);
+        transform.x =
+            mouseX - (mouseX - transform.x) * (newScale / transform.scale);
+        transform.y =
+            mouseY - (mouseY - transform.y) * (newScale / transform.scale);
         transform.scale = newScale;
         clampTransform();
     }
 
-    function spawnVIPTrial(x, y, tint) {
-        vipTrails.push({ x, y, life: 30, color: tint, size: Math.random() * 5 + 2 });
-        if (vipTrails.length > 50) vipTrails.shift();
+    export function zoomIn() {
+        applyZoom(1.3);
     }
 
+    export function zoomOut() {
+        applyZoom(0.7);
+    }
+
+    function applyZoom(factor) {
+        const newScale = Math.min(
+            Math.max(transform.scale * factor, getMinScale()),
+            8,
+        );
+        const centerX = window.innerWidth / 2;
+        const centerY = window.innerHeight / 2;
+        transform.x =
+            centerX - (centerX - transform.x) * (newScale / transform.scale);
+        transform.y =
+            centerY - (centerY - transform.y) * (newScale / transform.scale);
+        transform.scale = newScale;
+        clampTransform();
+    }
+
+    // VFX
+    function spawnVIPTrial(x, y, tint) {
+        vipTrails.push({
+            x,
+            y,
+            life: 30,
+            color: tint,
+            size: Math.random() * 5 + 2,
+        });
+        if (vipTrails.length > 50) vipTrails.shift();
+    }
     function spawnSparkle(x, y) {
-        for(let i=0; i<2; i++) {
+        for (let i = 0; i < 2; i++) {
             sparkles.push({
-                x, y, vx: (Math.random() - 0.5) * 5, vy: (Math.random() - 0.5) * 5,
-                life: 40 + Math.random() * 20, size: Math.random() * 4 + 2
+                x,
+                y,
+                vx: (Math.random() - 0.5) * 5,
+                vy: (Math.random() - 0.5) * 5,
+                life: 40 + Math.random() * 20,
+                size: Math.random() * 4 + 2,
             });
         }
     }
-
     function spawnShockwave(x, y, color, maxR) {
         shockwaves.push({ x, y, r: 0, maxR, alpha: 1, color });
     }
-
     function triggerNuke(x, y) {
         const radius = 350;
-        strokes = strokes.filter(s => !s.points.some(p => Math.hypot(p.x - x, p.y - y) < radius));
+        strokes = strokes.filter(
+            (s) => !s.points.some((p) => Math.hypot(p.x - x, p.y - y) < radius),
+        );
         sync("nuke", { x, y, radius });
         spawnAtomicEffect(x, y);
         triggerShake(1.5);
-        save();
     }
-
     function triggerBurst(x, y) {
         sync("confetti", { x, y, isVIP: true, mega: true });
         spawnConfetti(x, y, true, true);
         spawnShockwave(x, y, "#fbbf24", 500);
         triggerShake(0.8);
     }
-
+    function triggerShake(intensity = 1) {
+        isShaking = intensity;
+        setTimeout(() => (isShaking = false), 500);
+    }
     function spawnAtomicEffect(x, y) {
         spawnShockwave(x, y, "#ffffff", 600);
         spawnShockwave(x, y, "#ef4444", 400);
-        for(let i=0; i<80; i++) {
+        for (let i = 0; i < 80; i++) {
             particles.push({
-                x, y, vx: (Math.random() - 0.5) * 60, vy: (Math.random() - 0.5) * 60 - 20,
-                color: Math.random() > 0.3 ? "#451a03" : "#f97316", life: 150 + Math.random() * 50, size: 15 + Math.random() * 10
+                x,
+                y,
+                vx: (Math.random() - 0.5) * 60,
+                vy: (Math.random() - 0.5) * 60 - 20,
+                color: Math.random() > 0.3 ? "#451a03" : "#f97316",
+                life: 150 + Math.random() * 50,
+                size: 15 + Math.random() * 10,
             });
         }
     }
-
     function spawnConfetti(cx, cy, vip = false, mega = false) {
-        const count = mega ? 300 : (vip ? 150 : 40);
+        const count = mega ? 300 : vip ? 150 : 40;
         const colors = vip ? ["#fbbf24", "#f59e0b", "#ffffff"] : null;
         for (let i = 0; i < count; i++) {
             particles.push({
-                x: cx, y: cy,
-                vx: (Math.random() - 0.5) * (mega ? 60 : (vip ? 40 : 20)),
-                vy: (Math.random() - 0.5) * (mega ? 60 : (vip ? 40 : 20)) - (vip ? 25 : 15),
-                color: colors ? colors[Math.floor(Math.random() * colors.length)] : `hsl(${Math.random() * 360}, 80%, 60%)`,
-                life: (mega ? 200 : (vip ? 150 : 80)) + Math.random() * 40, size: (mega ? 12 : (vip ? 8 : 6)) + Math.random() * 10,
+                x: cx,
+                y: cy,
+                vx: (Math.random() - 0.5) * (mega ? 60 : vip ? 40 : 20),
+                vy:
+                    (Math.random() - 0.5) * (mega ? 60 : vip ? 40 : 20) -
+                    (vip ? 25 : 15),
+                color: colors
+                    ? colors[Math.floor(Math.random() * colors.length)]
+                    : `hsl(${Math.random() * 360}, 80%, 60%)`,
+                life: (mega ? 200 : vip ? 150 : 80) + Math.random() * 40,
+                size: (mega ? 12 : vip ? 8 : 6) + Math.random() * 10,
             });
         }
     }
 
-    function triggerShake(intensity = 1) {
-        isShaking = intensity;
-        setTimeout(() => isShaking = false, 500);
+    // New Network Sync Logic
+    function sync(type, data) {
+        if (socket?.connected) socket.emit(type, data);
+        channel.postMessage({ type, data });
     }
 
-    function sync(type, data) { channel.postMessage({ type, data }); }
     function save() {
-        localStorage.setItem("canvas_strokes_v6", JSON.stringify(strokes));
-        localStorage.setItem("canvas_ads_v6", JSON.stringify(ads));
+        localStorage.setItem("canvas_strokes_v8", JSON.stringify(strokes));
+        localStorage.setItem("canvas_ads_v8", JSON.stringify(ads));
     }
 
     export function resetView() {
-        transform = { x: canvas.width / 2, y: canvas.height / 2, scale: getMinScale() * 1.5 };
+        if (!canvas) return;
+        transform = {
+            x: canvas.width / 2,
+            y: canvas.height / 2,
+            scale: getMinScale() * 1.5,
+        };
     }
 
     export function placeAdAuto(imageData) {
         const width = 200 + Math.random() * 300;
         const height = width * 0.7;
-        const maxX = CANVAS_SIZE / 2 - width - 50;
-        const maxY = CANVAS_SIZE / 2 - height - 50;
-        const x = -CANVAS_SIZE / 2 + 50 + Math.random() * (maxX + CANVAS_SIZE / 2 - 50);
-        const y = -CANVAS_SIZE / 2 + 50 + Math.random() * (maxY + CANVAS_SIZE / 2 - 50);
-        const newAd = { x, y, width, height, image: imageData, id: Math.random(), username, isVIP };
+        const x =
+            -CANVAS_SIZE / 2 +
+            100 +
+            Math.random() * (CANVAS_SIZE - 200 - width);
+        const y =
+            -CANVAS_SIZE / 2 +
+            100 +
+            Math.random() * (CANVAS_SIZE - 200 - height);
+        const newAd = {
+            x,
+            y,
+            width,
+            height,
+            image: imageData,
+            id: Math.random(),
+            username,
+            isVIP,
+        };
         ads.push(newAd);
         sync("new_ad", newAd);
         save();
-        spawnAtomicEffect(x + width/2, y + height/2);
+        spawnAtomicEffect(x + width / 2, y + height / 2);
     }
 
     onMount(() => {
         ctx = canvas.getContext("2d");
-        const s = localStorage.getItem("canvas_strokes_v6");
-        const a = localStorage.getItem("canvas_ads_v6");
-        const p = localStorage.getItem("pixel_count_v3");
-        if (s) strokes = JSON.parse(s);
-        if (a) ads = JSON.parse(a);
-        if (p) pixelCount = parseInt(p);
 
-        window.addEventListener("resize", () => {
+        // Multi-Device Socket.io Connection
+        try {
+            socket = io("http://localhost:3001");
+            socket.on("init", (data) => {
+                strokes = data.strokes;
+                ads = data.ads;
+            });
+            socket.on("stroke_start", (data) => strokes.push(data));
+            socket.on("stroke_update", (data) => {
+                const s = strokes.find((s) => s.id === data.id);
+                if (s) s.points.push(data.point);
+            });
+            socket.on("new_ad", (data) => ads.push(data));
+            socket.on("cursor", (data) => {
+                remoteUsers[data.username] = { ...data, timestamp: Date.now() };
+                onUsersUpdate?.(Object.values(remoteUsers));
+            });
+            socket.on("confetti", (data) => {
+                spawnConfetti(data.x, data.y, data.isVIP, data.mega);
+                if (data.mega) {
+                    spawnShockwave(data.x, data.y, "#fbbf24", 500);
+                    triggerShake(0.8);
+                }
+            });
+            socket.on("nuke", (data) => {
+                strokes = strokes.filter(
+                    (s) =>
+                        !s.points.some(
+                            (p) =>
+                                Math.hypot(p.x - data.x, p.y - data.y) <
+                                data.radius,
+                        ),
+                );
+                spawnAtomicEffect(data.x, data.y);
+                triggerShake(1.5);
+            });
+            socket.on("clear", () => {
+                strokes = [];
+                ads = [];
+                window.location.reload();
+            });
+        } catch (e) {
+            console.warn("Socket.io offline. Using fallbacks.");
+        }
+
+        // Local Fallback
+        const s = localStorage.getItem("canvas_strokes_v8");
+        const a = localStorage.getItem("canvas_ads_v8");
+        if (s && strokes.length === 0) strokes = JSON.parse(s);
+        if (a && ads.length === 0) ads = JSON.parse(a);
+
+        const handleResize = () => {
             canvas.width = window.innerWidth;
             canvas.height = window.innerHeight;
             clampTransform();
-        });
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
+        };
+        window.addEventListener("resize", handleResize);
+        handleResize();
         resetView();
 
         const loop = () => {
             time += 0.05;
             rainbowHue = (rainbowHue + 2) % 360;
-            if (isRainbow && isDrawing && currentStroke) currentStroke.color = `hsl(${rainbowHue}, 100%, 50%)`;
-            
+            if (isRainbow && isDrawing && currentStroke)
+                currentStroke.color = `hsl(${rainbowHue}, 100%, 50%)`;
             const now = Date.now();
-            particles = particles.map(p => ({ ...p, x: p.x + p.vx, y: p.y + p.vy, vy: p.vy + 0.5, life: p.life - 1 })).filter(p => p.life > 0);
-            vipTrails = vipTrails.map(p => ({ ...p, life: p.life - 1, size: p.size * 0.95 })).filter(p => p.life > 0);
-            sparkles = sparkles.map(s => ({ ...s, x: s.x + s.vx, y: s.y + s.vy, life: s.life - 1, size: s.size * 0.98 })).filter(s => s.life > 0);
-            shockwaves = shockwaves.map(s => ({ ...s, r: s.r + 20, alpha: Math.max(0, 1 - s.r / s.maxR) })).filter(s => s.alpha > 0);
-            
-            strokes = strokes.filter(s => !(s.isGhost && now - s.timestamp > 5000));
-            
+            particles = particles
+                .map((p) => ({
+                    ...p,
+                    x: p.x + p.vx,
+                    y: p.y + p.vy,
+                    vy: p.vy + 0.5,
+                    life: p.life - 1,
+                }))
+                .filter((p) => p.life > 0);
+            vipTrails = vipTrails
+                .map((p) => ({ ...p, life: p.life - 1, size: p.size * 0.95 }))
+                .filter((p) => p.life > 0);
+            sparkles = sparkles
+                .map((s) => ({
+                    ...s,
+                    x: s.x + s.vx,
+                    y: s.y + s.vy,
+                    life: s.life - 1,
+                    size: s.size * 0.98,
+                }))
+                .filter((s) => s.life > 0);
+            shockwaves = shockwaves
+                .map((s) => ({
+                    ...s,
+                    r: s.r + 20,
+                    alpha: Math.max(0, 1 - s.r / s.maxR),
+                }))
+                .filter((s) => s.alpha > 0);
+            strokes = strokes.filter(
+                (s) => !(s.isGhost && now - s.timestamp > 5000),
+            );
+
+            let changed = false;
+            for (let id in remoteUsers) {
+                if (now - remoteUsers[id].timestamp > 3000) {
+                    delete remoteUsers[id];
+                    changed = true;
+                }
+            }
+            if (changed) onUsersUpdate?.(Object.values(remoteUsers));
+
             draw();
             requestAnimationFrame(loop);
         };
         requestAnimationFrame(loop);
 
         channel.onmessage = (e) => {
+            if (socket?.connected) return; // Ignore if server is doing the work
             const { type, data } = e.data;
             if (type === "stroke_start") strokes.push(data);
             else if (type === "stroke_update") {
-                const s = strokes.find(s => s.id === data.id);
+                const s = strokes.find((s) => s.id === data.id);
                 if (s) s.points.push(data.point);
             } else if (type === "new_ad") ads.push(data);
             else if (type === "cursor") {
-                remoteCursors.set(data.username, { ...data, timestamp: Date.now() });
-                onUsersUpdate?.(Array.from(remoteCursors.values()));
-            } else if (type === "confetti") {
-                spawnConfetti(data.x, data.y, data.isVIP, data.mega);
-                if (data.mega) { spawnShockwave(data.x, data.y, "#fbbf24", 500); triggerShake(0.8); }
-            } else if (type === "nuke") {
-                strokes = strokes.filter(s => !s.points.some(p => Math.hypot(p.x - data.x, p.y - data.y) < data.radius));
-                spawnAtomicEffect(data.x, data.y);
-                triggerShake(1.5);
+                remoteUsers[data.username] = { ...data, timestamp: Date.now() };
+                onUsersUpdate?.(Object.values(remoteUsers));
             } else if (type === "clear") {
-                strokes = []; ads = []; pixelCount = 0;
-                localStorage.removeItem("canvas_strokes_v6");
-                localStorage.removeItem("canvas_ads_v6");
-                localStorage.removeItem("pixel_count_v3");
+                strokes = [];
+                ads = [];
+                window.location.reload();
             }
         };
 
-        return () => channel.close();
+        return () => {
+            window.removeEventListener("resize", handleResize);
+            socket?.disconnect();
+            channel.close();
+        };
     });
 
     function draw() {
         if (!ctx) return;
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.fillStyle = "#f8fafc";
+        ctx.fillStyle = "#1e293b";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
         ctx.translate(transform.x, transform.y);
         ctx.scale(transform.scale, transform.scale);
 
-        // Surface
-        ctx.fillStyle = "#ffffff";
-        ctx.shadowBlur = 60 / transform.scale;
-        ctx.shadowColor = "rgba(0,0,0,0.06)";
-        ctx.fillRect(-CANVAS_SIZE/2, -CANVAS_SIZE/2, CANVAS_SIZE, CANVAS_SIZE);
-        ctx.shadowBlur = 0;
+        // Heavy Paper Shadow
+        ctx.fillStyle = "rgba(0,0,0,0.5)";
+        ctx.fillRect(
+            -CANVAS_SIZE / 2 + 10,
+            -CANVAS_SIZE / 2 + 10,
+            CANVAS_SIZE,
+            CANVAS_SIZE,
+        );
 
-        // Grid
-        ctx.strokeStyle = "rgba(0,0,0,0.03)";
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(
+            -CANVAS_SIZE / 2,
+            -CANVAS_SIZE / 2,
+            CANVAS_SIZE,
+            CANVAS_SIZE,
+        );
+
+        ctx.strokeStyle = "rgba(0,0,0,0.04)";
         ctx.lineWidth = 1 / transform.scale;
         ctx.beginPath();
-        for (let x = -CANVAS_SIZE/2; x <= CANVAS_SIZE/2; x += 100) { ctx.moveTo(x, -CANVAS_SIZE/2); ctx.lineTo(x, CANVAS_SIZE/2); }
-        for (let y = -CANVAS_SIZE/2; y <= CANVAS_SIZE/2; y += 100) { ctx.moveTo(-CANVAS_SIZE/2, y); ctx.lineTo(CANVAS_SIZE/2, y); }
+        for (let x = -CANVAS_SIZE / 2; x <= CANVAS_SIZE / 2; x += 100) {
+            ctx.moveTo(x, -CANVAS_SIZE / 2);
+            ctx.lineTo(x, CANVAS_SIZE / 2);
+        }
+        for (let y = -CANVAS_SIZE / 2; y <= CANVAS_SIZE / 2; y += 100) {
+            ctx.moveTo(-CANVAS_SIZE / 2, y);
+            ctx.lineTo(CANVAS_SIZE / 2, y);
+        }
         ctx.stroke();
 
-        // Ads
-        ads.forEach(ad => {
+        ads.forEach((ad) => {
             let img = imageCache.get(ad.image);
             if (!img) {
-                img = new Image(); img.src = ad.image;
+                img = new Image();
+                img.src = ad.image;
                 img.onload = () => imageCache.set(ad.image, img);
             }
             if (img?.complete) {
                 ctx.save();
-                ctx.beginPath(); ctx.roundRect(ad.x, ad.y, ad.width, ad.height, 12/transform.scale); ctx.clip();
-                ctx.drawImage(img, ad.x, ad.y, ad.width, ad.height);ctx.restore();
+                ctx.beginPath();
+                ctx.roundRect(
+                    ad.x,
+                    ad.y,
+                    ad.width,
+                    ad.height,
+                    20 / transform.scale,
+                );
+                ctx.clip();
+                ctx.drawImage(img, ad.x, ad.y, ad.width, ad.height);
+                ctx.restore();
                 if (ad.isVIP) {
-                    ctx.strokeStyle = `hsl(45, 100%, ${50 + Math.sin(time)*20}%)`;
-                    ctx.lineWidth = 8/transform.scale;
-                    ctx.shadowBlur = 15/transform.scale; ctx.shadowColor = "#fbbf24";
+                    ctx.strokeStyle = `hsl(45, 100%, ${50 + Math.sin(time * 3) * 15}%)`;
+                    ctx.lineWidth = 12 / transform.scale;
+                    ctx.shadowBlur = 30 / transform.scale;
+                    ctx.shadowColor = "#fbbf24";
                 } else {
-                    ctx.strokeStyle = "rgba(0,0,0,0.08)"; ctx.lineWidth = 1/transform.scale;
+                    ctx.strokeStyle = "#1e293b";
+                    ctx.lineWidth = 4 / transform.scale;
                 }
-                ctx.stroke(); ctx.shadowBlur = 0;
+                ctx.stroke();
+                ctx.shadowBlur = 0;
             }
         });
 
-        // Strokes
         const now = Date.now();
-        strokes.forEach(s => {
+        strokes.forEach((s) => {
             if (s.points.length < 2) return;
             ctx.beginPath();
             ctx.lineWidth = s.width;
             ctx.strokeStyle = s.color;
-            if (s.isVIP) { ctx.shadowBlur = (s.isRainbow ? 8 : 4)/transform.scale; ctx.shadowColor = s.color; }
-            if (s.isGhost) ctx.globalAlpha = Math.max(0, 1 - (now - s.timestamp)/5000);
-            ctx.lineCap = "round"; ctx.lineJoin = "round";
+            if (s.isVIP) {
+                ctx.shadowBlur = (s.isRainbow ? 12 : 6) / transform.scale;
+                ctx.shadowColor = s.color;
+            }
+            if (s.isGhost)
+                ctx.globalAlpha = Math.max(0, 1 - (now - s.timestamp) / 5000);
+            ctx.lineCap = "round";
+            ctx.lineJoin = "round";
             ctx.moveTo(s.points[0].x, s.points[0].y);
-            for(let i=1; i<s.points.length; i++) ctx.lineTo(s.points[i].x, s.points[i].y);
-            ctx.stroke(); ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+            for (let i = 1; i < s.points.length; i++)
+                ctx.lineTo(s.points[i].x, s.points[i].y);
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+            ctx.globalAlpha = 1;
         });
 
-        // VFX
-        vipTrails.forEach(p => { ctx.globalAlpha = p.life/30; ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, p.size/transform.scale, 0, Math.PI*2); ctx.fill(); });
-        sparkles.forEach(s => {
-            ctx.globalAlpha = s.life/60; ctx.fillStyle = "#fff"; ctx.shadowBlur = 10/transform.scale; ctx.shadowColor = "#fbbf24";
-            const r = s.size/transform.scale;
-            ctx.beginPath(); ctx.moveTo(s.x, s.y-r); ctx.lineTo(s.x+r, s.y); ctx.lineTo(s.x, s.y+r); ctx.lineTo(s.x-r, s.y); ctx.fill(); ctx.shadowBlur = 0;
+        vipTrails.forEach((p) => {
+            ctx.globalAlpha = p.life / 30;
+            ctx.fillStyle = p.color;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.size / transform.scale, 0, Math.PI * 2);
+            ctx.fill();
         });
-        shockwaves.forEach(s => {
-            ctx.globalAlpha = s.alpha; ctx.strokeStyle = s.color; ctx.lineWidth = 15/transform.scale;
-            ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI*2); ctx.stroke();
+        sparkles.forEach((s) => {
+            ctx.globalAlpha = s.life / 60;
+            ctx.fillStyle = "#fff";
+            ctx.shadowBlur = 12 / transform.scale;
+            ctx.shadowColor = "#fbbf24";
+            const r = (s.size + Math.sin(time * 12) * 3) / transform.scale;
+            ctx.beginPath();
+            ctx.moveTo(s.x, s.y - r);
+            ctx.lineTo(s.x + r, s.y);
+            ctx.lineTo(s.x, s.y + r);
+            ctx.lineTo(s.x - r, s.y);
+            ctx.fill();
+            ctx.shadowBlur = 0;
         });
-        particles.forEach(p => { ctx.globalAlpha = Math.min(p.life/50, 1); ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, p.size/transform.scale, 0, Math.PI*2); ctx.fill(); });
+        shockwaves.forEach((s) => {
+            ctx.globalAlpha = s.alpha;
+            ctx.strokeStyle = s.color;
+            ctx.lineWidth = 30 / transform.scale;
+            ctx.beginPath();
+            ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+            ctx.stroke();
+        });
+        particles.forEach((p) => {
+            ctx.globalAlpha = Math.min(p.life / 50, 1);
+            ctx.fillStyle = p.color;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.size / transform.scale, 0, Math.PI * 2);
+            ctx.fill();
+        });
         ctx.globalAlpha = 1;
 
-        // Cursors
-        remoteCursors.forEach(c => {
+        Object.values(remoteUsers).forEach((c) => {
             if (c.username === username) return;
-            const dot = (c.isVIP ? 6 : 4)/transform.scale;
+            const dot = (c.isVIP ? 10 : 6) / transform.scale;
             if (c.isVIP) {
-                ctx.beginPath(); ctx.arc(c.x, c.y, dot*2.5, 0, Math.PI*2);
-                const g = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, dot*2.5);
-                g.addColorStop(0, "rgba(251, 191, 36, 0.4)"); g.addColorStop(1, "rgba(251, 191, 36, 0)");
-                ctx.fillStyle = g; ctx.fill();
+                ctx.beginPath();
+                ctx.arc(c.x, c.y, dot * 3.5, 0, Math.PI * 2);
+                const g = ctx.createRadialGradient(
+                    c.x,
+                    c.y,
+                    0,
+                    c.x,
+                    c.y,
+                    dot * 3.5,
+                );
+                g.addColorStop(0, "rgba(251, 191, 36, 0.6)");
+                g.addColorStop(1, "rgba(251, 191, 36, 0)");
+                ctx.fillStyle = g;
+                ctx.fill();
             }
-            ctx.beginPath(); ctx.arc(c.x, c.y, dot, 0, Math.PI*2); ctx.fillStyle = c.isVIP ? "#fbbf24" : (c.color || "#3b82f6"); ctx.fill();
-            ctx.font = `${(c.isVIP ? 12 : 10)/transform.scale}px "Inter"`;
+            ctx.beginPath();
+            ctx.arc(c.x, c.y, dot, 0, Math.PI * 2);
+            ctx.fillStyle = c.isVIP ? "#fbbf24" : c.color || "#3b82f6";
+            ctx.fill();
+            ctx.font = `800 ${14 / transform.scale}px "Outfit"`;
             const txt = c.username + (c.isVIP ? " ✨" : "");
             const tw = ctx.measureText(txt).width;
-            ctx.fillStyle = c.isVIP ? "rgba(251,191,36,0.95)" : "rgba(15,23,42,0.85)";
-            ctx.beginPath(); ctx.roundRect(c.x+8/transform.scale, c.y-14/transform.scale, tw + 12/transform.scale, (c.isVIP ? 18 : 16)/transform.scale, 4/transform.scale); ctx.fill();
-            ctx.fillStyle = c.isVIP ? "#000" : "#fff"; ctx.fillText(txt, c.x + 14/transform.scale, c.y-1/transform.scale);
+            ctx.fillStyle = c.isVIP ? "#fbbf24" : "#1e293b";
+            ctx.beginPath();
+            ctx.roundRect(
+                c.x + 15 / transform.scale,
+                c.y - 20 / transform.scale,
+                tw + 20 / transform.scale,
+                28 / transform.scale,
+                10 / transform.scale,
+            );
+            ctx.fill();
+            ctx.fillStyle = c.isVIP ? "#000" : "#fff";
+            ctx.fillText(
+                txt,
+                c.x + 25 / transform.scale,
+                c.y + 0 / transform.scale,
+            );
         });
     }
 </script>
@@ -422,7 +743,7 @@
 <canvas
     bind:this={canvas}
     class:shaking={isShaking !== false}
-    intensity={isShaking || 0}
+    style="--intensity: {isShaking || 1}"
     onmousedown={handlePointerDown}
     onmousemove={handlePointerMove}
     onmouseup={handlePointerUp}
@@ -445,30 +766,31 @@
         display: block;
         width: 100vw;
         height: 100vh;
-        background: #f8fafc;
+        background: #0f172a;
         cursor: crosshair;
         touch-action: none;
     }
     .shaking {
-        animation: shake 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+        animation: shake calc(0.4s / var(--intensity))
+            cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
     }
     @keyframes shake {
         10%,
         90% {
-            transform: translate3d(-1px, 0, 0);
+            transform: translate3d(calc(-2px * var(--intensity)), 0, 0);
         }
         20%,
         80% {
-            transform: translate3d(2px, 0, 0);
+            transform: translate3d(calc(4px * var(--intensity)), 0, 0);
         }
         30%,
         50%,
         70% {
-            transform: translate3d(-4px, 1px, 0);
+            transform: translate3d(calc(-6px * var(--intensity)), 2px, 0);
         }
         40%,
         60% {
-            transform: translate3d(4px, -1px, 0);
+            transform: translate3d(calc(6px * var(--intensity)), -2px, 0);
         }
     }
 </style>
