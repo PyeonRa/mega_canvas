@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="ko">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Injection Demo</title>
+    <style>
+        html
+        {
+            height: 100%;
+        }
+
+        body
+        {
+            height: 100%;
+            margin: 0;
+            display: grid;
+            place-items: center;
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans KR", sans-serif;
+            background: #0b0f14;
+            color: #e8eef6;
+        }
+
+        .box
+        {
+            width: min(520px, calc(100% - 32px));
+            padding: 18px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 14px;
+            background: rgba(255, 255, 255, 0.04);
+        }
+
+        .title
+        {
+            font-size: 16px;
+            font-weight: 700;
+            margin: 0 0 10px 0;
+        }
+
+        .row
+        {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .input
+        {
+            flex: 1;
+            padding: 12px 12px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            background: rgba(0, 0, 0, 0.25);
+            color: #e8eef6;
+            outline: none;
+        }
+
+        .btn
+        {
+            padding: 12px 12px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            background: rgba(255, 255, 255, 0.08);
+            color: #e8eef6;
+            cursor: pointer;
+        }
+
+        .status
+        {
+            margin-top: 12px;
+            font-size: 13px;
+            opacity: 0.9;
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+        }
+
+        .count
+        {
+            font-variant-numeric: tabular-nums;
+            font-weight: 700;
+        }
+    </style>
+</head>
+<body>
+    <div class="box">
+        <div class="title">인젝션 연출: 문구 → 3,2,1 → alert + console.log</div>
+
+        <div class="row">
+            <input id="target" class="input" placeholder="여기 클릭해 포커스 주고 버튼 누르기" />
+            <button id="go" class="btn" type="button">실행</button>
+        </div>
+
+        <div class="status">
+            <div id="msg">대기 중</div>
+            <div class="count" id="count">-</div>
+        </div>
+    </div>
+
+    <script>
+        function dispatchInput(el)
+        {
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            el.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+
+        function insertAtCursor(el, text)
+        {
+            let start = el.selectionStart ?? el.value.length;
+            let end = el.selectionEnd ?? el.value.length;
+
+            el.setRangeText(text, start, end, "end");
+            dispatchInput(el);
+        }
+
+        function sleep(ms)
+        {
+            return new Promise((r) => setTimeout(r, ms));
+        }
+
+        async function run()
+        {
+            let input = document.getElementById("target");
+            let msg = document.getElementById("msg");
+            let count = document.getElementById("count");
+
+            input.focus();
+
+            msg.textContent = "해킹중...";
+            insertAtCursor(input, "✨ Hacked ");
+
+            await sleep(300);
+
+            msg.textContent = "카운트다운...";
+            for (let n = 3; n >= 1; n--)
+            {
+                count.textContent = String(n);
+                await sleep(700);
+            }
+
+            count.textContent = "GO";
+            console.log("[injection-demo] fired", { at: new Date().toISOString(), value: input.value });
+            alert("해킹 완료. 정보 전송 완료.");
+            msg.textContent = "완료 (콘솔 로그 확인)";
+        }
+
+        document.getElementById("go").onclick = run;
+    </script>
+</body>
+</html>
