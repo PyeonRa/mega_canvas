@@ -13,10 +13,11 @@
         mouseCoord = $bindable(null),
         pixelCount = $bindable(0),
         onUsersUpdate,
+        nukeCooldown = $bindable(0),
+        socket = $bindable(),
     } = $props();
 
     // Multi-Device Sync (Socket.io)
-    let socket;
     const channel = new BroadcastChannel("mega_canvas_v7");
     const CANVAS_SIZE = 5000;
 
@@ -42,9 +43,16 @@
     let vipTrails = $state([]);
     let sparkles = $state([]);
     let shockwaves = $state([]);
+    let stamps = $state([]);
+    let ripples = $state([]);
+    let floatingTexts = $state([]);
+    let sparklers = $state([]);
+    let lastNukeTime = $state(0);
+    let flashOpacity = $state(0);
     let isShaking = $state(false);
     let time = $state(0);
     let rainbowHue = $state(0);
+    let grainCanvas = null;
 
     const imageCache = new Map();
 
@@ -133,8 +141,37 @@
             }
             isPanning = true;
             lastPos = { x: clientX, y: clientY };
+        } else if ((e.button === 0 || e.touches) && mode === "stamp") {
+            if (!isInBounds(pos.x, pos.y)) return;
+            spawnRipple(pos.x, pos.y, "#3b82f6");
+            const emojiList = [
+                "🔥",
+                "💎",
+                "❤️",
+                "👑",
+                "☢️",
+                "🦄",
+                "🌈",
+                "☀️",
+                "💀",
+            ];
+            const randomEmoji =
+                emojiList[Math.floor(Math.random() * emojiList.length)];
+            const newStamp = {
+                x: pos.x,
+                y: pos.y,
+                text: randomEmoji,
+                size: 60 + Math.random() * 40,
+                rotation: (Math.random() - 0.5) * 0.5,
+                id: Math.random(),
+                username,
+            };
+            stamps.push(newStamp);
+            sync("new_stamp", newStamp);
+            spawnConfetti(pos.x, pos.y, false, false);
         } else if ((e.button === 0 || e.touches) && mode === "draw") {
             if (!isInBounds(pos.x, pos.y)) return;
+            spawnRipple(pos.x, pos.y, color);
             isDrawing = true;
             currentStroke = {
                 points: [pos],
@@ -149,6 +186,9 @@
             };
             strokes.push(currentStroke);
             sync("stroke_start", currentStroke);
+        } else if ((e.button === 0 || e.touches) && mode === "sparkle") {
+            if (!isInBounds(pos.x, pos.y)) return;
+            isDrawing = true;
         }
     }
 
@@ -214,9 +254,37 @@
         } else if (isDrawing && currentStroke) {
             if (isInBounds(pos.x, pos.y)) {
                 currentStroke.points.push(pos);
-                pixelCount += Math.ceil(brushSize / 4);
+                const pAdded = Math.ceil(brushSize / 4);
+                pixelCount += pAdded;
+                // Much lower frequency for floating text (5% -> 2%)
+                if (Math.random() > 0.98)
+                    spawnFloatingText(pos.x, pos.y - 20, `+${pAdded}`);
                 sync("stroke_update", { id: currentStroke.id, point: pos });
                 if (isVIP) spawnSparkle(pos.x, pos.y);
+
+                // High-End Progress Feedback
+                if (pixelCount > 0 && pixelCount % 1000 === 0) {
+                    spawnFloatingText(
+                        pos.x,
+                        pos.y - 50,
+                        "⭐ MILESTONE REACHED!",
+                    );
+                    spawnConfetti(pos.x, pos.y, true, false);
+                }
+            }
+        } else if (isDrawing && mode === "sparkle") {
+            if (isInBounds(pos.x, pos.y)) {
+                for (let i = 0; i < 3; i++) {
+                    sparklers.push({
+                        x: pos.x + (Math.random() - 0.5) * 10,
+                        y: pos.y + (Math.random() - 0.5) * 10,
+                        vx: (Math.random() - 0.5) * 2,
+                        vy: (Math.random() - 0.5) * 2,
+                        life: 40 + Math.random() * 20,
+                        hue: Math.random() * 360,
+                    });
+                }
+                sync("sparkler", { x: pos.x, y: pos.y });
             }
         }
     }
@@ -295,10 +363,31 @@
     }
     function triggerNuke(x, y) {
         const radius = 350;
-        strokes = strokes.filter(
-            (s) => !s.points.some((p) => Math.hypot(p.x - x, p.y - y) < radius),
-        );
+        const now = Date.now();
+        if (now - lastNukeTime < 60000) return;
+
+        lastNukeTime = now;
         sync("nuke", { x, y, radius });
+        applyNukeEffect(x, y, radius);
+    }
+    function applyNukeEffect(x, y, radius) {
+        flashOpacity = 0.25; // Even subtler flash
+        strokes = strokes.flatMap((s) => {
+            let result = [];
+            let current = [];
+            s.points.forEach((p) => {
+                if (Math.hypot(p.x - x, p.y - y) > radius) {
+                    current.push(p);
+                } else if (current.length > 0) {
+                    result.push({ ...s, points: current, id: Math.random() });
+                    current = [];
+                }
+            });
+            if (current.length > 0)
+                result.push({ ...s, points: current, id: Math.random() });
+            return result;
+        });
+        stamps = stamps.filter((s) => Math.hypot(s.x - x, s.y - y) > radius);
         spawnAtomicEffect(x, y);
         triggerShake(1.5);
     }
@@ -308,6 +397,15 @@
         spawnShockwave(x, y, "#fbbf24", 500);
         triggerShake(0.8);
     }
+    function spawnRipple(x, y, color) {
+        // Reduced life and alpha for subtler look
+        ripples.push({ x, y, r: 0, alpha: 0.4, color, life: 30 });
+        sync("ripple", { x, y, color });
+    }
+    function spawnFloatingText(x, y, text) {
+        // Smaller and faster
+        floatingTexts.push({ x, y, text, life: 60, vy: -1.0, opacity: 0.8 });
+    }
     function triggerShake(intensity = 1) {
         isShaking = intensity;
         setTimeout(() => (isShaking = false), 500);
@@ -315,46 +413,51 @@
     function spawnAtomicEffect(x, y) {
         spawnShockwave(x, y, "#ffffff", 600);
         spawnShockwave(x, y, "#ef4444", 400);
-        for (let i = 0; i < 80; i++) {
+        // Reduced particle count for performance (80 -> 35)
+        for (let i = 0; i < 35; i++) {
+            if (particles.length > 150) particles.shift(); // Hard limit
             particles.push({
                 x,
                 y,
-                vx: (Math.random() - 0.5) * 60,
-                vy: (Math.random() - 0.5) * 60 - 20,
-                color: Math.random() > 0.3 ? "#451a03" : "#f97316",
-                life: 150 + Math.random() * 50,
-                size: 15 + Math.random() * 10,
+                vx: (Math.random() - 0.5) * 50,
+                vy: (Math.random() - 0.5) * 50 - 15,
+                color: Math.random() > 0.4 ? "#f97316" : "#451a03",
+                life: 100 + Math.random() * 50,
+                size: 10 + Math.random() * 8,
             });
         }
     }
     function spawnConfetti(cx, cy, vip = false, mega = false) {
-        const count = mega ? 300 : vip ? 150 : 40;
+        // Significantly reduced counts for performance
+        const count = mega ? 80 : vip ? 40 : 20;
         const colors = vip ? ["#fbbf24", "#f59e0b", "#ffffff"] : null;
         for (let i = 0; i < count; i++) {
+            if (particles.length > 150) particles.shift();
             particles.push({
                 x: cx,
                 y: cy,
-                vx: (Math.random() - 0.5) * (mega ? 60 : vip ? 40 : 20),
-                vy:
-                    (Math.random() - 0.5) * (mega ? 60 : vip ? 40 : 20) -
-                    (vip ? 25 : 15),
+                vx: (Math.random() - 0.5) * (mega ? 40 : 15),
+                vy: (Math.random() - 0.5) * (mega ? 40 : 15) - (vip ? 15 : 5),
                 color: colors
                     ? colors[Math.floor(Math.random() * colors.length)]
                     : `hsl(${Math.random() * 360}, 80%, 60%)`,
-                life: (mega ? 200 : vip ? 150 : 80) + Math.random() * 40,
-                size: (mega ? 12 : vip ? 8 : 6) + Math.random() * 10,
+                life: (mega ? 120 : 60) + Math.random() * 30,
+                size: (mega ? 10 : 5) + Math.random() * 5,
             });
         }
     }
 
     function sync(type, data) {
-        if (socket?.connected) socket.emit(type, data);
-        channel.postMessage({ type, data });
+        // Svelte 5 state proxies cannot be cloned for BroadcastChannel
+        const cleanData = JSON.parse(JSON.stringify(data));
+        if (socket?.connected) socket.emit(type, cleanData);
+        channel.postMessage({ type, data: cleanData });
     }
 
     function save() {
         localStorage.setItem("canvas_strokes_v8", JSON.stringify(strokes));
         localStorage.setItem("canvas_ads_v8", JSON.stringify(ads));
+        localStorage.setItem("canvas_stamps_v8", JSON.stringify(stamps));
     }
 
     export function resetView() {
@@ -395,15 +498,26 @@
 
     onMount(() => {
         ctx = canvas.getContext("2d");
+
+        // Pre-render paper texture for stable performance
+        grainCanvas = document.createElement("canvas");
+        grainCanvas.width = 500;
+        grainCanvas.height = 500;
+        const gctx = grainCanvas.getContext("2d");
+        gctx.fillStyle = "#000";
+        gctx.globalAlpha = 0.08;
+        for (let i = 0; i < 2000; i++) {
+            gctx.fillRect(Math.random() * 500, Math.random() * 500, 1, 1);
+        }
+
         try {
-            const serverUrl =
-                window.location.hostname === "localhost"
-                    ? "http://localhost:3001"
-                    : `http://${window.location.hostname}:3001`;
-            socket = io(serverUrl, {
+            // Handle Mixed Content: Use window.location.protocol for remote devices
+            const socketUrl = window.location.origin;
+            socket = io(socketUrl, {
                 reconnection: true,
                 reconnectionAttempts: 10,
                 timeout: 5000,
+                transports: ["websocket", "polling"], // Force websocket for better cross-origin stability
             });
             socket.on("connect", () =>
                 console.log("✅ Synced to Global Board"),
@@ -411,8 +525,10 @@
             socket.on("init", (data) => {
                 strokes = data.strokes || [];
                 ads = data.ads || [];
+                stamps = data.stamps || [];
             });
             socket.on("stroke_start", (data) => strokes.push(data));
+            socket.on("new_stamp", (data) => stamps.push(data));
             socket.on("stroke_update", (data) => {
                 const s = strokes.find((s) => s.id === data.id);
                 if (s) s.points.push(data.point);
@@ -430,20 +546,22 @@
                 }
             });
             socket.on("nuke", (data) => {
-                strokes = strokes.filter(
-                    (s) =>
-                        !s.points.some(
-                            (p) =>
-                                Math.hypot(p.x - data.x, p.y - data.y) <
-                                data.radius,
-                        ),
-                );
-                spawnAtomicEffect(data.x, data.y);
-                triggerShake(1.5);
+                applyNukeEffect(data.x, data.y, data.radius);
+            });
+            socket.on("ripple", (data) => {
+                ripples.push({
+                    x: data.x,
+                    y: data.y,
+                    r: 0,
+                    alpha: 1,
+                    color: data.color,
+                    life: 60,
+                });
             });
             socket.on("clear", () => {
                 strokes = [];
                 ads = [];
+                stamps = [];
                 window.location.reload();
             });
         } catch (e) {
@@ -452,8 +570,10 @@
 
         const s = localStorage.getItem("canvas_strokes_v8");
         const a = localStorage.getItem("canvas_ads_v8");
+        const st = localStorage.getItem("canvas_stamps_v8");
         if (s && strokes.length === 0) strokes = JSON.parse(s);
         if (a && ads.length === 0) ads = JSON.parse(a);
+        if (st && stamps.length === 0) stamps = JSON.parse(st);
 
         const handleResize = () => {
             canvas.width = window.innerWidth;
@@ -469,7 +589,13 @@
             rainbowHue = (rainbowHue + 2) % 360;
             if (isRainbow && isDrawing && currentStroke)
                 currentStroke.color = `hsl(${rainbowHue}, 100%, 50%)`;
+            flashOpacity = Math.max(0, flashOpacity - 0.03); // Faster fade
             const now = Date.now();
+
+            // Update Cooldown Prop
+            const left = Math.ceil((60000 - (now - lastNukeTime)) / 1000);
+            nukeCooldown = left > 0 && left <= 60 ? left : 0;
+
             particles = particles
                 .map((p) => ({
                     ...p,
@@ -498,6 +624,30 @@
                     alpha: Math.max(0, 1 - s.r / s.maxR),
                 }))
                 .filter((s) => s.alpha > 0);
+            ripples = ripples
+                .map((r) => ({
+                    ...r,
+                    r: r.r + 3,
+                    alpha: (r.life / 30) * 0.4,
+                    life: r.life - 1,
+                }))
+                .filter((r) => r.life > 0);
+            floatingTexts = floatingTexts
+                .map((f) => ({
+                    ...f,
+                    y: f.y + f.vy,
+                    opacity: f.life / 60,
+                    life: f.life - 1,
+                }))
+                .filter((f) => f.life > 0);
+            sparklers = sparklers
+                .map((s) => ({
+                    ...s,
+                    x: s.x + s.vx,
+                    y: s.y + s.vy,
+                    life: s.life - 1,
+                }))
+                .filter((s) => s.life > 0);
             strokes = strokes.filter(
                 (s) => !(s.isGhost && now - s.timestamp > 5000),
             );
@@ -509,6 +659,12 @@
                 }
             }
             if (changed) onUsersUpdate?.(Object.values(remoteUsers));
+
+            // Limit total interactive objects for extreme optimization
+            if (particles.length > 100) particles = particles.slice(-100);
+            if (sparkles.length > 50) sparkles = sparkles.slice(-50);
+            if (vipTrails.length > 30) vipTrails = vipTrails.slice(-30);
+
             draw();
             requestAnimationFrame(loop);
         };
@@ -522,12 +678,36 @@
                 const s = strokes.find((s) => s.id === data.id);
                 if (s) s.points.push(data.point);
             } else if (type === "new_ad") ads.push(data);
-            else if (type === "cursor") {
+            else if (type === "new_stamp") stamps.push(data);
+            else if (type === "sparkler") {
+                for (let i = 0; i < 2; i++) {
+                    sparklers.push({
+                        x: data.x,
+                        y: data.y,
+                        vx: (Math.random() - 0.5) * 2,
+                        vy: (Math.random() - 0.5) * 2,
+                        life: 40,
+                        hue: Math.random() * 360,
+                    });
+                }
+            } else if (type === "ripple") {
+                ripples.push({
+                    x: data.x,
+                    y: data.y,
+                    r: 0,
+                    alpha: 1,
+                    color: data.color,
+                    life: 60,
+                });
+            } else if (type === "cursor") {
                 remoteUsers[data.username] = { ...data, timestamp: Date.now() };
                 onUsersUpdate?.(Object.values(remoteUsers));
+            } else if (type === "nuke") {
+                applyNukeEffect(data.x, data.y, data.radius);
             } else if (type === "clear") {
                 strokes = [];
                 ads = [];
+                stamps = [];
                 window.location.reload();
             }
         };
@@ -574,6 +754,21 @@
         }
         ctx.stroke();
 
+        // Stable Paper Grain Texture (Pattern)
+        if (grainCanvas) {
+            ctx.save();
+            ctx.globalAlpha = 0.04;
+            const pattern = ctx.createPattern(grainCanvas, "repeat");
+            ctx.fillStyle = pattern;
+            ctx.fillRect(
+                -CANVAS_SIZE / 2,
+                -CANVAS_SIZE / 2,
+                CANVAS_SIZE,
+                CANVAS_SIZE,
+            );
+            ctx.restore();
+        }
+
         ads.forEach((ad) => {
             let img = imageCache.get(ad.image);
             if (!img) {
@@ -609,6 +804,18 @@
         });
 
         const now = Date.now();
+
+        stamps.forEach((s) => {
+            ctx.save();
+            ctx.translate(s.x, s.y);
+            ctx.rotate(s.rotation || 0);
+            ctx.font = `${s.size}px Arial`;
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText(s.text, 0, 0);
+            ctx.restore();
+        });
+
         strokes.forEach((s) => {
             if (s.points.length < 2) return;
             ctx.beginPath();
@@ -666,10 +873,55 @@
             ctx.arc(p.x, p.y, p.size / transform.scale, 0, Math.PI * 2);
             ctx.fill();
         });
+
+        ripples.forEach((r) => {
+            ctx.globalAlpha = r.alpha;
+            ctx.strokeStyle = r.color;
+            ctx.lineWidth = 2 / transform.scale;
+            ctx.beginPath();
+            ctx.arc(r.x, r.y, r.r, 0, Math.PI * 2);
+            ctx.stroke();
+        });
+
+        floatingTexts.forEach((f) => {
+            ctx.globalAlpha = f.opacity * 0.6; // Even more transparent
+            ctx.fillStyle = "#64748b"; // Soft slate color
+            ctx.font = `bold ${12 / transform.scale}px "Inter"`;
+            ctx.textAlign = "center";
+            ctx.fillText(f.text, f.x, f.y);
+        });
+
+        sparklers.forEach((s) => {
+            ctx.globalAlpha = s.life / 60;
+            ctx.fillStyle = `hsl(${s.hue}, 100%, 70%)`;
+            ctx.shadowBlur = 10 / transform.scale;
+            ctx.shadowColor = `hsl(${s.hue}, 100%, 70%)`;
+            ctx.beginPath();
+            ctx.arc(s.x, s.y, 3 / transform.scale, 0, Math.PI * 2);
+            ctx.fill();
+        });
+        ctx.shadowBlur = 0;
+
         ctx.globalAlpha = 1;
 
         Object.values(remoteUsers).forEach((c) => {
             if (c.username === username) return;
+            // Draw Cursor Pulse (Subtler)
+            ctx.save();
+            ctx.globalAlpha = 0.1;
+            ctx.lineWidth = 1 / transform.scale;
+            ctx.beginPath();
+            ctx.arc(
+                c.x,
+                c.y,
+                (10 + Math.sin(time * 6) * 3) / transform.scale,
+                0,
+                Math.PI * 2,
+            );
+            ctx.strokeStyle = c.color || "#3b82f6";
+            ctx.stroke();
+            ctx.restore();
+
             const dot = (c.isVIP ? 10 : 6) / transform.scale;
             if (c.isVIP) {
                 ctx.beginPath();
@@ -711,6 +963,13 @@
                 c.y + 0 / transform.scale,
             );
         });
+
+        // Global Effects (Flash)
+        if (flashOpacity > 0) {
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.fillStyle = `rgba(255, 255, 255, ${flashOpacity})`;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
     }
 </script>
 

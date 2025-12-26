@@ -6,6 +6,8 @@
         onlineUsersCount,
         showShopModal = $bindable(),
         isUsersOpen = $bindable(),
+        isDarkMode,
+        toggleTheme,
     } = $props();
 </script>
 
@@ -55,6 +57,18 @@
                 </div>
             {/if}
             <button
+                class="btn-icon theme-toggle"
+                onclick={toggleTheme}
+                aria-label="Toggle Theme"
+                title="Switch Appearance"
+            >
+                {#if isDarkMode}
+                    <span>☀️</span>
+                {:else}
+                    <span>🌙</span>
+                {/if}
+            </button>
+            <button
                 class="btn-icon sidebar-toggle"
                 onclick={() => (isUsersOpen = !isUsersOpen)}
                 aria-label="Users"
@@ -95,16 +109,16 @@
     .nav-container {
         width: 100%;
         height: 56px;
-        background: rgba(15, 23, 42, 0.8);
+        background: var(--glass-bg);
         backdrop-filter: blur(20px);
         border-radius: 18px;
-        border: 1px solid rgba(255, 255, 255, 0.1);
+        border: 1px solid var(--glass-border);
         display: flex;
         align-items: center;
         justify-content: space-between;
         padding: 0 16px;
         pointer-events: auto;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+        box-shadow: 0 8px 32px var(--glass-shadow);
     }
     .brand {
         display: flex;
@@ -146,8 +160,8 @@
         margin-top: 2px;
     }
     .stats-card {
-        background: rgba(255, 255, 255, 0.03);
-        border: 1px solid rgba(255, 255, 255, 0.05);
+        background: var(--card-bg);
+        border: 1px solid var(--glass-border);
         padding: 6px 16px;
         border-radius: 12px;
         display: flex;
@@ -163,19 +177,19 @@
     .stat-item .label {
         font-size: 0.55rem;
         font-weight: 800;
-        color: rgba(255, 255, 255, 0.4);
+        color: #94a3b8;
     }
     .stat-item .value {
         font-family: "JetBrains Mono", monospace;
         font-size: 0.8rem;
         font-weight: 600;
-        color: #e2e8f0;
+        color: var(--text-main);
         white-space: nowrap;
     }
     .divider {
         width: 1px;
         height: 20px;
-        background: rgba(255, 255, 255, 0.1);
+        background: rgba(0, 0, 0, 0.05);
     }
     .nav-actions {
         display: flex;
@@ -234,22 +248,22 @@
         color: #fbbf24;
     }
     .btn-icon {
-        background: rgba(255, 255, 255, 0.05);
-        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: var(--card-bg);
+        border: 1px solid var(--glass-border);
         width: 40px;
         height: 40px;
         display: flex;
         align-items: center;
         justify-content: center;
         border-radius: 12px;
-        color: #94a3b8;
+        color: var(--text-muted);
         cursor: pointer;
         position: relative;
         transition: all 0.2s;
     }
     .btn-icon:hover {
-        background: rgba(255, 255, 255, 0.1);
-        color: white;
+        background: var(--glass-border);
+        color: var(--text-main);
     }
     .count-badge {
         position: absolute;
@@ -266,7 +280,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        border: 2px solid #0f172a;
+        border: 2px solid #fff;
     }
     @media (max-width: 900px) {
         .nav-container {

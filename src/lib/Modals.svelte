@@ -158,7 +158,7 @@
         pointer-events: auto;
     }
     .glass-heavy {
-        background: rgba(15, 23, 42, 0.4);
+        background: var(--glass-shadow);
         backdrop-filter: blur(32px);
     }
     .dark-blur {
@@ -166,14 +166,14 @@
         backdrop-filter: blur(12px);
     }
     .premium-modal {
-        background: #1e293b;
-        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: var(--bg-app);
+        border: 1px solid var(--glass-border);
         border-radius: 32px;
         padding: 40px;
         width: 100%;
         max-width: 460px;
         text-align: center;
-        box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+        box-shadow: 0 24px 64px var(--glass-shadow);
     }
     .modal-icon {
         font-size: 3.5rem;
@@ -183,6 +183,7 @@
         font-size: 1.75rem;
         font-weight: 800;
         margin-bottom: 12px;
+        color: var(--text-main);
     }
     .premium-modal p {
         color: #94a3b8;
@@ -195,11 +196,11 @@
         gap: 16px;
     }
     .input-form input {
-        background: rgba(0, 0, 0, 0.2);
-        border: 2px solid rgba(255, 255, 255, 0.05);
+        background: var(--card-bg);
+        border: 2px solid var(--glass-border);
         padding: 16px;
         border-radius: 16px;
-        color: white;
+        color: var(--text-main);
         font-family: inherit;
         font-size: 1rem;
         text-align: center;
@@ -208,7 +209,7 @@
     .input-form input:focus {
         border-color: #2563eb;
         outline: none;
-        background: rgba(0, 0, 0, 0.3);
+        background: var(--bg-app);
     }
     .btn-submit {
         background: linear-gradient(135deg, #3b82f6, #2563eb);
@@ -239,7 +240,7 @@
         background: linear-gradient(135deg, #0ea5e9, #2563eb);
     }
     .upload-zone {
-        border: 3px dashed rgba(255, 255, 255, 0.1);
+        border: 3px dashed var(--glass-border);
         border-radius: 24px;
         min-height: 200px;
         display: flex;
@@ -297,16 +298,16 @@
         flex: 1;
     }
     .btn-ghost {
-        background: rgba(255, 255, 255, 0.05);
-        color: #94a3b8;
+        background: rgba(0, 0, 0, 0.03);
+        color: #64748b;
         border: none;
         border-radius: 16px;
         font-weight: 800;
         cursor: pointer;
     }
     .offer-card {
-        background: rgba(255, 255, 255, 0.03);
-        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: var(--card-bg);
+        border: 1px solid var(--glass-border);
         border-radius: 24px;
         padding: 32px;
         position: relative;
@@ -345,7 +346,7 @@
     }
     .features li {
         font-size: 0.9rem;
-        color: #cbd5e1;
+        color: #475569;
         display: flex;
         align-items: center;
         gap: 8px;
@@ -377,7 +378,7 @@
     .btn-text-only {
         background: none;
         border: none;
-        color: #64748b;
+        color: #94a3b8;
         font-weight: 600;
         margin-top: 24px;
         cursor: pointer;

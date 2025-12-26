@@ -1,56 +1,61 @@
-# 🎨 MEGA CANVAS: VIP Prestige Edition Walkthrough
+# MEGA CANVAS | Development Walkthrough
 
-**MEGA CANVAS**는 전 세계 아티스트들이 5000x5000의 광활한 공유 공간에서 실시간으로 협업하고 경쟁하는 웹 기반 캔버스 플랫폼입니다. 특히 이번 **VIP Prestige** 업데이트를 통해 단순한 드로잉을 넘어선 전술적 도구와 화려한 시각 효과가 추가되었습니다.
-
----
-
-## 🚀 시작하기
-
-1.  **닉네임 설정**: 앱 접속 시 아티스트명을 입력하여 워크스페이스에 참여합니다.
-2.  **기본 조작**:
-    *   **그리기 (Draw)**: 좌측 하단 펜 아이콘 선택 후 캔버스에 자유롭게 드로잉.
-    *   **화면 이동 (Pan)**: 손 아이콘을 선택하거나 마우스 휠 버튼(클릭)을 사용하여 캔버스 탐색.
-    *   **확대/축소 (Zoom)**: 마우스 휠이나 우측 하단의 `+`, `-` 버튼 사용.
+Welcome to the internal development guide for **Mega Canvas**. This document tracks the evolution of our real-time multiplayer doodle engine.
 
 ---
 
-## 👑 프리미엄 VIP 권위 (Prestige Features)
-
-'GO PREMIUM' 버튼을 눌러 VIP가 되면(영구 유지), 다음과 같은 압도적인 권한이 주어집니다.
-
-### 1. 전술 무기 시스템 (Tactical Weapons)
-*   **☢️ 아토믹 누크 (Atomic Nuke)**: 목표 지점을 타격하여 반경 내의 모든 그림을 소멸시킵니다. 화이트 플래시, 열충격파, 강력한 화면 흔들림 효과가 동반됩니다.
-*   **💥 메가 버스트 (Mega Burst)**: 마우스 클릭 위치에 화려한 황금빛 폭죽을 터뜨립니다. 모든 아티스트에게 당신의 존재감을 알리는 최고의 수단입니다.
-
-### 2. 마법의 펜 (Special Brushes)
-*   **🌈 레인보우 브러시**: 실시간으로 색상이 화려하게 변하는 무지개 선을 그립니다.
-*   **👻 유령 펜 (Ghost Pen)**: 그린 지 5초 후에 선이 마법처럼 서서히 사라집니다. 은밀한 메시지나 순간적인 예술 활동에 최적화되어 있습니다.
-
-### 3. 압도적 시각 효과 (Visual Aura)
-*   **골든 트레일 & 스파클**: VIP가 움직이거나 그릴 때마다 빛나는 입자와 다이아몬드 가루가 캔버스를 수놓습니다.
-*   **프레스티지 아우라**: VIP의 커서 주변에는 은은하게 빛나는 황금빛 오라가 맥동하여 멀리서도 존재감을 드러냅니다.
+## 🚀 Core Technology Stack
+- **Frontend**: Svelte 5 (Runes) + Vite
+- **Backend**: Node.js + Express + Socket.IO
+- **Communication**: Bidirectional Socket.IO for real-time synchronization
+- **Graphics**: HTML5 Canvas API with transformation matrix logic
 
 ---
 
-## 📢 미디어 동기화 (Media Sync)
-
-*   **Add Media**: 당신의 이미지나 광고를 캔버스 위에 영구적으로 배치할 수 있습니다. 이미지는 모든 동시 접속자에게 즉시 동기화됩니다.
-
----
-
-## 🛠️ 기술적 특징 (Technical Stack)
-
-*   **Framework**: **Svelte 5 (Runes)** - `$state`, `$props`, `$effect`를 사용한 최첨단 반응형 엔진.
-*   **Language**: **Pure JavaScript** - 복잡한 설정을 제거한 순수하고 빠른 JS 런타임.
-*   **Rendering**: **HTML5 Canvas API** - 수천 개의 스트로크와 파티클을 60FPS로 처리하는 고성능 렌더링.
-*   **Synchronization**: **BroadcastChannel API** - 서버 없이도 동일 브라우저 탭 간 실시간 데이터 미러링 구현.
-*   **Persistence**: **LocalStorage** - 닉네임, VIP 등급, 드로잉 데이터가 브라우저에 영구 저장됩니다.
+## 🎨 Design Philosophy: "Modern & Airy"
+Mega Canvas follows a **Premium Light Theme** aesthetic:
+- **Frosted Glass (Glassmorphism)**: All UI elements use semi-transparent white backgrounds with high-blur backdrops.
+- **Airy Palette**: Transitioned from a heavy dark theme to a clean #F1F5F9 foundation with subtle shadows.
+- **Micro-Animations**: Smooth GPU-accelerated transitions for modals, sidebars, and chat.
+- **Mobile-First**: Fully responsive Smart Dock and side-drawers for touch devices.
 
 ---
 
-## 💡 팁
-*   VIP 상태는 한 번 획득하면 영구 지속됩니다.
-*   핵(Nuke)이나 버스트(Burst)를 선택한 후, 캔버스의 **정확한 타격 지점**을 클릭하세요.
-*   온라인 아티스트 목록을 열어 현재 누가 함께 창작하고 있는지 확인하고 그들의 실시간 움직임을 관찰해보세요.
+## � Features & Capabilities
 
-이제 캔버스의 지배자가 되어 당신의 예술을 전 세계에 폭발시키세요! ☢️✨🎨
+### 1. Advanced Drawing Engine
+- **Infinite Resolution Logic**: Seamless zooming and panning using matrix transformations.
+- **Pressure-Simulated Strokes**: Adjustable brush sizes with smooth line-joining and capping.
+- **Surgical Nuke**: A nuke weapon that intelligently splits lines instead of just deleting them, maintaining part of the artwork.
+
+### 2. Real-Time Collaborative Environment
+- **Multi-User Sync**: Instantly see other users' cursors, strokes, and stickers.
+- **Secure Live Chat**: Integrated real-time chat with Svelte-native XSS/Injection protection.
+- **Online Presence**: Sidebar showing all active artists with VIP status indicators.
+
+### 3. Progressive Visual Effects (VFX)
+- **Subtle Feedback**: Polished ripples and floating EXP (pixel gain) numbers that provide juice without cluttering the view.
+- **Magical Tools**: Includes a 'Magic Sparkler' that creates temporary fizzling particles.
+- **Cinematic Events**: Screen-flash effects and globally synchronized milestone celebrations (+1,000px).
+
+### 4. Monetization & Engagement (Mockup)
+- **VIP Prestige**: Specialized tools like Rainbow Mode, Ghost Ink, and Mega Burst.
+- **Media Assets**: Integrated system for users to 'stamp' emojis or upload image ads to the canvas.
+
+---
+
+## � Security & Performance
+- **Injection Defense**: Server-side structure validation for chat and strokes.
+- **VFX Optimization**: Strict particle pooling and lifecycle management to maintain 60 FPS on mobile.
+- **Viewport Locking**: Prevented browser-level zooming to ensure drawing precision on mobile.
+
+---
+
+## 📍 Developer Notes
+- **CORS**: Currently set to `*` for development ease. Must be restricted for production.
+- **State Persistence**: Local storage is used for nicknames and VIP status.
+- **Scale Management**: Transformation logic is handled in `Canvas.svelte` via the `transform` state.
+
+---
+
+*Updated: Dec 2025*

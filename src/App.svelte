@@ -4,6 +4,7 @@
   import Sidebar from "./lib/Sidebar.svelte";
   import Toolbar from "./lib/Toolbar.svelte";
   import Modals from "./lib/Modals.svelte";
+  import Chat from "./lib/Chat.svelte";
   import { onMount } from "svelte";
 
   // State
@@ -24,6 +25,9 @@
   let isVIP = $state(false);
   let isRainbow = $state(false);
   let isGhost = $state(false);
+  let nukeCooldown = $state(0);
+  let socket = $state();
+  let isDarkMode = $state(false);
 
   const palette = [
     "#0f172a",
@@ -84,6 +88,13 @@
     if (confirm("⚠️ 모든 데이터를 초기화하고 캔버스를 비울까요?")) {
       const channel = new BroadcastChannel("mega_canvas_v7");
       channel.postMessage({ type: "clear" });
+
+      // If server is connected, it handles everything.
+      // If not, clear local storage.
+      localStorage.removeItem("canvas_strokes_v8");
+      localStorage.removeItem("canvas_ads_v8");
+      localStorage.removeItem("canvas_stamps_v8");
+
       window.location.reload();
     }
   }
@@ -96,10 +107,17 @@
     }
     const vip = localStorage.getItem("canvas_is_vip_v1");
     if (vip === "true") isVIP = true;
+
+    isDarkMode = localStorage.getItem("theme_v7") === "dark";
   });
+
+  const toggleTheme = () => {
+    isDarkMode = !isDarkMode;
+    localStorage.setItem("theme_v7", isDarkMode ? "dark" : "light");
+  };
 </script>
 
-<div class="app-root" class:is-vip={isVIP}>
+<div class="app-root" class:is-vip={isVIP} class:dark={isDarkMode}>
   <div class="bg-vibe"></div>
 
   <Canvas
@@ -113,6 +131,8 @@
     {isGhost}
     bind:mouseCoord
     bind:pixelCount
+    bind:nukeCooldown
+    bind:socket
     onUsersUpdate={(users) => (onlineUsers = users)}
   />
 
@@ -123,6 +143,8 @@
     onlineUsersCount={onlineUsers.length + 1}
     bind:showShopModal
     bind:isUsersOpen
+    {isDarkMode}
+    {toggleTheme}
   />
 
   <Sidebar
@@ -145,7 +167,10 @@
     bind:showAdModal
     {canvasRef}
     {clearAll}
+    {nukeCooldown}
   />
+
+  <Chat {socket} {username} {color} {isVIP} />
 
   <div class="floating-zoom">
     <button onclick={() => canvasRef.zoomIn()}>+</button>
@@ -174,14 +199,17 @@
     margin: 0;
     padding: 0;
   }
-  :global(body) {
-    font-family: "Outfit", sans-serif;
-    background: #0f172a;
-    color: #f8fafc;
-    overflow: hidden;
-  }
-
   .app-root {
+    /* Design Tokens */
+    --bg-app: #f1f5f9;
+    --text-main: #1e293b;
+    --text-muted: #64748b;
+    --glass-bg: rgba(255, 255, 255, 0.8);
+    --glass-border: rgba(0, 0, 0, 0.05);
+    --glass-shadow: rgba(0, 0, 0, 0.08);
+    --accent: #2563eb;
+    --card-bg: rgba(0, 0, 0, 0.02);
+
     position: relative;
     width: 100vw;
     height: 100vh;
@@ -190,27 +218,59 @@
     overflow: hidden;
   }
 
+  .app-root.dark {
+    --bg-app: #0f172a;
+    --text-main: #f8fafc;
+    --text-muted: #94a3b8;
+    --glass-bg: rgba(15, 23, 42, 0.8);
+    --glass-border: rgba(255, 255, 255, 0.1);
+    --glass-shadow: rgba(0, 0, 0, 0.4);
+    --card-bg: rgba(255, 255, 255, 0.03);
+  }
+
+  :global(body) {
+    font-family: "Outfit", sans-serif;
+    background: var(--bg-app);
+    color: var(--text-main);
+    overflow: hidden;
+    transition:
+      background 0.5s ease,
+      color 0.5s ease;
+  }
+
   .bg-vibe {
     position: absolute;
     inset: 0;
     background: radial-gradient(
         circle at 10% 20%,
-        rgba(37, 99, 235, 0.05) 0%,
+        rgba(37, 99, 235, 0.03) 0%,
         transparent 40%
       ),
       radial-gradient(
         circle at 90% 80%,
-        rgba(239, 68, 68, 0.05) 0%,
+        rgba(239, 68, 68, 0.03) 0%,
         transparent 40%
       );
     pointer-events: none;
     z-index: 1;
     transition: all 1s ease;
   }
+  .dark .bg-vibe {
+    background: radial-gradient(
+        circle at 10% 20%,
+        rgba(37, 99, 235, 0.08) 0%,
+        transparent 40%
+      ),
+      radial-gradient(
+        circle at 90% 80%,
+        rgba(239, 68, 68, 0.08) 0%,
+        transparent 40%
+      );
+  }
   .is-vip .bg-vibe {
     background: radial-gradient(
       circle at center,
-      rgba(251, 191, 36, 0.08) 0%,
+      rgba(251, 191, 36, 0.05) 0%,
       transparent 70%
     );
   }
@@ -229,14 +289,14 @@
     pointer-events: auto;
     width: 44px;
     height: 44px;
-    background: rgba(15, 23, 42, 0.8);
+    background: rgba(255, 255, 255, 0.85);
     backdrop-filter: blur(12px);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(0, 0, 0, 0.05);
     border-radius: 14px;
-    color: white;
+    color: #1e293b;
     font-size: 1.5rem;
     cursor: pointer;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
   }
 
   @media (max-width: 900px) {
