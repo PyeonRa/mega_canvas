@@ -14,18 +14,30 @@
         if (!socket) return;
 
         const handleMsg = (msg) => {
-            messages = [...messages, msg]; // Ensure reactivity via assignment
-            if (messages.length > 50) messages.shift();
+            console.log("📨 Chat UI Receiving:", msg);
+            messages.push(msg);
+            if (messages.length > 50) messages.splice(0, messages.length - 50);
             if (!isOpen) unreadCount++;
             scrollToBottom();
         };
 
         const handleInit = (data) => {
             if (data.chatHistory) {
-                messages = data.chatHistory;
+                messages.splice(0, messages.length, ...data.chatHistory);
                 scrollToBottom();
             }
         };
+
+        // UI Diagnostics: Dummy system welcome
+        if (messages.length === 0) {
+            messages.push({
+                id: "sys-" + Date.now(),
+                username: "SYSTEM",
+                text: "Welcome to Mega Canvas! Start chatting with other artists.",
+                color: "#6366f1",
+                isSystem: true,
+            });
+        }
 
         socket.on("chat_message", handleMsg);
         socket.on("init", handleInit);
@@ -101,10 +113,11 @@
 
             <div class="messages" bind:this={scrollContainer}>
                 {#each messages as msg (msg.id)}
-                    <div class="msg-wrap">
-                        <span class="sender" style="color: {msg.color}"
-                            >{msg.username || "Guest"}:</span
-                        >
+                    <div class="msg-wrap" class:sys={msg.isSystem}>
+                        <span class="sender" style="color: {msg.color}">
+                            {msg.username || "Guest"}:
+                            {#if msg.isVIP}✨{/if}
+                        </span>
                         <span class="text">{msg.text}</span>
                     </div>
                 {/each}
@@ -250,12 +263,19 @@
         color: var(--text-main);
     }
     .sender {
-        font-weight: 700;
+        font-weight: 800;
         margin-right: 6px;
     }
     .text {
         color: var(--text-main);
-        opacity: 0.9;
+        word-wrap: break-word;
+    }
+    .msg-wrap.sys {
+        font-style: italic;
+        opacity: 0.8;
+    }
+    .msg-wrap.sys .sender {
+        font-weight: 900;
     }
 
     .chat-input-wrap {

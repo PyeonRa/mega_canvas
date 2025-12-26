@@ -15,6 +15,7 @@
         onUsersUpdate,
         nukeCooldown = $bindable(0),
         socket = $bindable(),
+        isDarkMode = false,
     } = $props();
 
     // Multi-Device Sync (Socket.io)
@@ -511,13 +512,20 @@
         }
 
         try {
-            // Handle Mixed Content: Use window.location.protocol for remote devices
-            const socketUrl = window.location.origin;
-            socket = io(socketUrl, {
+            // Intelligent Server URL Detection
+            const isLocal =
+                window.location.hostname === "localhost" ||
+                window.location.hostname === "127.0.0.1";
+            const serverUrl = isLocal
+                ? `http://${window.location.hostname}:3001`
+                : window.location.origin;
+
+            socket = io(serverUrl, {
+                transports: ["polling", "websocket"], // Crucial for cloud proxies
                 reconnection: true,
                 reconnectionAttempts: 10,
-                timeout: 5000,
-                transports: ["websocket", "polling"], // Force websocket for better cross-origin stability
+                timeout: 10000,
+                autoConnect: true,
             });
             socket.on("connect", () =>
                 console.log("✅ Synced to Global Board"),
@@ -578,7 +586,7 @@
         const handleResize = () => {
             canvas.width = window.innerWidth;
             canvas.height = window.innerHeight;
-            clampTransform();
+            if (typeof clampTransform === "function") clampTransform();
         };
         window.addEventListener("resize", handleResize);
         handleResize();
@@ -734,16 +742,20 @@
             CANVAS_SIZE,
             CANVAS_SIZE,
         );
-        ctx.fillStyle = "#ffffff";
+        ctx.fillStyle = isDarkMode ? "#1e293b" : "#ffffff";
         ctx.fillRect(
             -CANVAS_SIZE / 2,
             -CANVAS_SIZE / 2,
             CANVAS_SIZE,
             CANVAS_SIZE,
         );
-        ctx.strokeStyle = "rgba(0,0,0,0.04)";
-        ctx.lineWidth = 1 / transform.scale;
+
+        // Draw Grid (Infinite feel)
         ctx.beginPath();
+        ctx.strokeStyle = isDarkMode
+            ? "rgba(255, 255, 255, 0.05)"
+            : "rgba(0, 0, 0, 0.03)";
+        ctx.lineWidth = 1 / transform.scale;
         for (let x = -CANVAS_SIZE / 2; x <= CANVAS_SIZE / 2; x += 100) {
             ctx.moveTo(x, -CANVAS_SIZE / 2);
             ctx.lineTo(x, CANVAS_SIZE / 2);
@@ -999,7 +1011,8 @@
         display: block;
         width: 100vw;
         height: 100vh;
-        background: #0f172a;
+        background: var(--bg-app);
+        transition: background 0.5s ease;
         cursor: crosshair;
         touch-action: none;
     }

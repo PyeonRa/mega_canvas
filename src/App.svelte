@@ -133,6 +133,7 @@
     bind:pixelCount
     bind:nukeCooldown
     bind:socket
+    {isDarkMode}
     onUsersUpdate={(users) => (onlineUsers = users)}
   />
 

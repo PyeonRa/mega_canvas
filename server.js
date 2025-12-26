@@ -8,7 +8,9 @@ const io = new Server(httpServer, {
     cors: {
         origin: "*",
         methods: ["GET", "POST"]
-    }
+    },
+    transports: ["polling", "websocket"], // Allow polling first for better compatibility
+    allowEIO3: true
 });
 
 // Store canvas state in memory
@@ -84,12 +86,12 @@ io.on("connection", (socket) => {
     });
 
     socket.on("chat_message", (msg) => {
-        // Basic sanitization: only allow plain objects with needed fields
         const safeMsg = {
-            id: Math.random().toString(36).substr(2, 9),
-            text: String(msg.text).substring(0, 200), // Max length
+            id: Math.random().toString(36).substring(2, 11),
+            text: String(msg.text).substring(0, 200),
             username: String(msg.username).substring(0, 20),
             color: String(msg.color),
+            isVIP: !!msg.isVIP,
             timestamp: Date.now()
         };
         chatHistory.push(safeMsg);
@@ -110,7 +112,7 @@ io.on("connection", (socket) => {
     });
 });
 
-const PORT = 3001;
+const PORT = 3001; // Restored to 3001 to match client expectation
 httpServer.listen(PORT, "0.0.0.0", () => {
     console.log("-----------------------------------------");
     console.log(`✨ MEGA CANVAS SERVER IS LIVE!`);
