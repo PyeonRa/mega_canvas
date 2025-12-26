@@ -58,8 +58,6 @@
     }
 
     function getMargin() {
-        // Use 35% of viewport as margin, capped at 350px for desktop.
-        // This ensures canvas is visible even on small screens with toolbars.
         return Math.min(
             350,
             Math.min(window.innerWidth, window.innerHeight) * 0.35,
@@ -71,7 +69,6 @@
         const margin = getMargin();
         const availableW = window.innerWidth - margin * 2;
         const availableH = window.innerHeight - margin * 2;
-        // Calculate scale to fit canvas + double margin into the smaller dimension
         return Math.min(availableW, availableH) / CANVAS_SIZE;
     }
 
@@ -83,23 +80,15 @@
         const limitH = (CANVAS_SIZE / 2) * transform.scale;
         const margin = getMargin();
 
-        // X-axis clamping
         const minX = window.innerWidth - limitW - margin;
         const maxX = limitW + margin;
-        if (minX > maxX) {
-            transform.x = window.innerWidth / 2; // Center if smaller than space
-        } else {
-            transform.x = Math.max(minX, Math.min(maxX, transform.x));
-        }
+        if (minX > maxX) transform.x = window.innerWidth / 2;
+        else transform.x = Math.max(minX, Math.min(maxX, transform.x));
 
-        // Y-axis clamping
         const minY = window.innerHeight - limitH - margin;
         const maxY = limitH + margin;
-        if (minY > maxY) {
-            transform.y = window.innerHeight / 2; // Center if smaller than space
-        } else {
-            transform.y = Math.max(minY, Math.min(maxY, transform.y));
-        }
+        if (minY > maxY) transform.y = window.innerHeight / 2;
+        else transform.y = Math.max(minY, Math.min(maxY, transform.y));
     }
 
     function getCanvasPos(e) {
@@ -171,8 +160,6 @@
             const dx = e.touches[0].clientX - e.touches[1].clientX;
             const dy = e.touches[0].clientY - e.touches[1].clientY;
             const dist = Math.hypot(dx, dy);
-
-            // New Zoom Scale
             const newScale = Math.min(
                 Math.max(
                     pinch.startScale * (dist / pinch.startDist),
@@ -180,33 +167,22 @@
                 ),
                 8,
             );
-
-            // Current Midpoint (Panning)
             const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
             const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-
-            // Midpoint displacement
             const moveX = midX - pinch.startMid.x;
             const moveY = midY - pinch.startMid.y;
-
             const rect = canvas.getBoundingClientRect();
             const centerX = pinch.startMid.x - rect.left;
             const centerY = pinch.startMid.y - rect.top;
-
-            // Update transform with combined zoom & pan
-            // First apply the zoom around the initial midpoint
             const zoomX =
                 centerX -
                 (centerX - pinch.startOffset.x) * (newScale / pinch.startScale);
             const zoomY =
                 centerY -
                 (centerY - pinch.startOffset.y) * (newScale / pinch.startScale);
-
-            // Then add the displacement
             transform.scale = newScale;
             transform.x = zoomX + moveX;
             transform.y = zoomY + moveY;
-
             clampTransform();
             return;
         }
@@ -273,7 +249,6 @@
     export function zoomIn() {
         applyZoom(1.3);
     }
-
     export function zoomOut() {
         applyZoom(0.7);
     }
@@ -293,7 +268,6 @@
         clampTransform();
     }
 
-    // VFX
     function spawnVIPTrial(x, y, tint) {
         vipTrails.push({
             x,
@@ -373,7 +347,6 @@
         }
     }
 
-    // New Network Sync Logic
     function sync(type, data) {
         if (socket?.connected) socket.emit(type, data);
         channel.postMessage({ type, data });
@@ -422,13 +395,22 @@
 
     onMount(() => {
         ctx = canvas.getContext("2d");
-
-        // Multi-Device Socket.io Connection
         try {
-            socket = io("http://localhost:3001");
+            const serverUrl =
+                window.location.hostname === "localhost"
+                    ? "http://localhost:3001"
+                    : `http://${window.location.hostname}:3001`;
+            socket = io(serverUrl, {
+                reconnection: true,
+                reconnectionAttempts: 10,
+                timeout: 5000,
+            });
+            socket.on("connect", () =>
+                console.log("✅ Synced to Global Board"),
+            );
             socket.on("init", (data) => {
-                strokes = data.strokes;
-                ads = data.ads;
+                strokes = data.strokes || [];
+                ads = data.ads || [];
             });
             socket.on("stroke_start", (data) => strokes.push(data));
             socket.on("stroke_update", (data) => {
@@ -468,7 +450,6 @@
             console.warn("Socket.io offline. Using fallbacks.");
         }
 
-        // Local Fallback
         const s = localStorage.getItem("canvas_strokes_v8");
         const a = localStorage.getItem("canvas_ads_v8");
         if (s && strokes.length === 0) strokes = JSON.parse(s);
@@ -520,7 +501,6 @@
             strokes = strokes.filter(
                 (s) => !(s.isGhost && now - s.timestamp > 5000),
             );
-
             let changed = false;
             for (let id in remoteUsers) {
                 if (now - remoteUsers[id].timestamp > 3000) {
@@ -529,14 +509,13 @@
                 }
             }
             if (changed) onUsersUpdate?.(Object.values(remoteUsers));
-
             draw();
             requestAnimationFrame(loop);
         };
         requestAnimationFrame(loop);
 
         channel.onmessage = (e) => {
-            if (socket?.connected) return; // Ignore if server is doing the work
+            if (socket?.connected) return;
             const { type, data } = e.data;
             if (type === "stroke_start") strokes.push(data);
             else if (type === "stroke_update") {
@@ -566,11 +545,8 @@
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.fillStyle = "#1e293b";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-
         ctx.translate(transform.x, transform.y);
         ctx.scale(transform.scale, transform.scale);
-
-        // Heavy Paper Shadow
         ctx.fillStyle = "rgba(0,0,0,0.5)";
         ctx.fillRect(
             -CANVAS_SIZE / 2 + 10,
@@ -578,7 +554,6 @@
             CANVAS_SIZE,
             CANVAS_SIZE,
         );
-
         ctx.fillStyle = "#ffffff";
         ctx.fillRect(
             -CANVAS_SIZE / 2,
@@ -586,7 +561,6 @@
             CANVAS_SIZE,
             CANVAS_SIZE,
         );
-
         ctx.strokeStyle = "rgba(0,0,0,0.04)";
         ctx.lineWidth = 1 / transform.scale;
         ctx.beginPath();
@@ -777,20 +751,20 @@
     @keyframes shake {
         10%,
         90% {
-            transform: translate3d(calc(-2px * var(--intensity)), 0, 0);
+            transform: translate3d(-1px, 0, 0);
         }
         20%,
         80% {
-            transform: translate3d(calc(4px * var(--intensity)), 0, 0);
+            transform: translate3d(2px, 0, 0);
         }
         30%,
         50%,
         70% {
-            transform: translate3d(calc(-6px * var(--intensity)), 2px, 0);
+            transform: translate3d(-4px, 0, 0);
         }
         40%,
         60% {
-            transform: translate3d(calc(6px * var(--intensity)), -2px, 0);
+            transform: translate3d(4px, 0, 0);
         }
     }
 </style>
