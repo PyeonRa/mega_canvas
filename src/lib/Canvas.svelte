@@ -1,52 +1,47 @@
 <script>
-    import { onMount, createEventDispatcher } from "svelte";
+    import { onMount } from "svelte";
 
-    const dispatch = createEventDispatcher();
+    let { 
+        color = "#1e293b", 
+        brushSize = 5, 
+        mode = $bindable("draw"), 
+        username = "Guest", 
+        isVIP = false, 
+        isRainbow = false, 
+        isGhost = false,
+        mouseCoord = $bindable(null),
+        pixelCount = $bindable(0),
+        onUsersUpdate
+    } = $props();
+
     const channel = new BroadcastChannel("canvas_sync");
-
-    // Constants
     const CANVAS_SIZE = 5000;
 
-    let canvas;
-    let ctx;
-    let transform = { x: 0, y: 0, scale: 0.3 };
-    let isPanning = false;
-    let isDrawing = false;
-    let lastPos = { x: 0, y: 0 };
-    let pinchStartDist = 0;
-    let pinchStartScale = 1;
+    let canvas = $state();
+    let ctx = $state();
+    let transform = $state({ x: 0, y: 0, scale: 0.3 });
+    let isPanning = $state(false);
+    let isDrawing = $state(false);
+    let lastPos = $state({ x: 0, y: 0 });
+    let pinch = $state({ startDist: 0, startScale: 1 });
+    
+    let strokes = $state([]);
+    let ads = $state([]);
+    let currentStroke = $state(null);
+    let remoteCursors = $state(new Map());
+    let particles = $state([]);
+    let vipTrails = $state([]);
+    let sparkles = $state([]);
+    let shockwaves = $state([]);
+    let isShaking = $state(false);
+    let time = $state(0);
+    let rainbowHue = $state(0);
 
-    let strokes = [];
-    let ads = [];
-    let currentStroke = null;
-
-    export let color = "#1e293b";
-    export let brushSize = 5;
-    export let mode = "draw";
-    export let username = "Guest";
-    export let isVIP = false;
-    export let isRainbow = false;
-    export let isGhost = false;
-    let isShaking = false;
-    let shockwaves = []; // { x, y, r, alpha, color }
-
-    // Exported coordinate (only when inside canvas)
-    export let mouseCoord = null;
-    export let pixelCount = 0;
-
-    // Remote users cursors
-    let remoteCursors = new Map();
-    let particles = [];
-    let vipTrails = []; // { x, y, life, color }
-    let sparkles = []; // { x, y, vx, vy, life, size, color }
+    const imageCache = new Map();
 
     function isInBounds(x, y) {
-        return (
-            x >= -CANVAS_SIZE / 2 &&
-            x <= CANVAS_SIZE / 2 &&
-            y >= -CANVAS_SIZE / 2 &&
-            y <= CANVAS_SIZE / 2
-        );
+        return x >= -CANVAS_SIZE/2 && x <= CANVAS_SIZE/2 && 
+               y >= -CANVAS_SIZE/2 && y <= CANVAS_SIZE/2;
     }
 
     function getMinScale() {
@@ -57,62 +52,40 @@
     function clampTransform() {
         const minScale = getMinScale();
         if (transform.scale < minScale) transform.scale = minScale;
-
-        const limitX = (CANVAS_SIZE / 2) * transform.scale;
-        const limitY = (CANVAS_SIZE / 2) * transform.scale;
+        const limit = (CANVAS_SIZE / 2) * transform.scale;
         const margin = 50;
-
-        transform.x = Math.max(
-            window.innerWidth - limitX - margin,
-            Math.min(limitX + margin, transform.x),
-        );
-        transform.y = Math.max(
-            window.innerHeight - limitY - margin,
-            Math.min(limitY + margin, transform.y),
-        );
-    }
-
-    function getEventPos(e) {
-        if (e.touches && e.touches.length > 0) {
-            return {
-                clientX: e.touches[0].clientX,
-                clientY: e.touches[0].clientY,
-            };
-        }
-        return { clientX: e.clientX, clientY: e.clientY };
+        transform.x = Math.max(window.innerWidth - limit - margin, Math.min(limit + margin, transform.x));
+        transform.y = Math.max(window.innerHeight - limit - margin, Math.min(limit + margin, transform.y));
     }
 
     function getCanvasPos(e) {
-        const { clientX, clientY } = getEventPos(e);
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
         const rect = canvas.getBoundingClientRect();
-        const x = (clientX - rect.left - transform.x) / transform.scale;
-        const y = (clientY - rect.top - transform.y) / transform.scale;
-        return { x, y };
+        return {
+            x: (clientX - rect.left - transform.x) / transform.scale,
+            y: (clientY - rect.top - transform.y) / transform.scale
+        };
     }
 
     function handlePointerDown(e) {
         if (e.touches && e.touches.length === 2) {
             const dx = e.touches[0].clientX - e.touches[1].clientX;
             const dy = e.touches[0].clientY - e.touches[1].clientY;
-            pinchStartDist = Math.sqrt(dx * dx + dy * dy);
-            pinchStartScale = transform.scale;
+            pinch.startDist = Math.hypot(dx, dy);
+            pinch.startScale = transform.scale;
             return;
         }
 
         const pos = getCanvasPos(e);
-        const { clientX, clientY } = getEventPos(e);
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
 
-        if (
-            e.button === 1 ||
-            (e.button === 0 &&
-                (mode === "pan" || mode === "nuke" || mode === "burst")) ||
-            (e.touches &&
-                (mode === "pan" || mode === "nuke" || mode === "burst"))
-        ) {
+        if (e.button === 1 || (e.button === 0 && (mode === "pan" || mode === "nuke" || mode === "burst"))) {
             if (mode === "nuke" || mode === "burst") {
-                const pos = getCanvasPos(e);
                 if (mode === "nuke") triggerNuke(pos.x, pos.y);
                 else triggerBurst(pos.x, pos.y);
+                mode = "draw"; // Return to draw after use
                 return;
             }
             isPanning = true;
@@ -120,18 +93,11 @@
         } else if ((e.button === 0 || e.touches) && mode === "draw") {
             if (!isInBounds(pos.x, pos.y)) return;
             isDrawing = true;
-            currentStroke = {
-                points: [pos],
-                color,
-                width: brushSize,
-                id: Math.random(),
-                username,
-                isVIP,
-                isRainbow,
-                isGhost,
-                timestamp: Date.now(),
+            currentStroke = { 
+                points: [pos], color, width: brushSize, id: Math.random(), 
+                username, isVIP, isRainbow, isGhost, timestamp: Date.now() 
             };
-            strokes = [...strokes, currentStroke];
+            strokes.push(currentStroke);
             sync("stroke_start", currentStroke);
         }
     }
@@ -140,99 +106,44 @@
         if (e.touches && e.touches.length === 2) {
             const dx = e.touches[0].clientX - e.touches[1].clientX;
             const dy = e.touches[0].clientY - e.touches[1].clientY;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            const newScale = Math.min(
-                Math.max(
-                    pinchStartScale * (dist / pinchStartDist),
-                    getMinScale(),
-                ),
-                8,
-            );
-
+            const dist = Math.hypot(dx, dy);
+            const newScale = Math.min(Math.max(pinch.startScale * (dist / pinch.startDist), getMinScale()), 8);
             const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
             const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
             const rect = canvas.getBoundingClientRect();
             const centerX = midX - rect.left;
             const centerY = midY - rect.top;
-
-            transform.x =
-                centerX -
-                (centerX - transform.x) * (newScale / transform.scale);
-            transform.y =
-                centerY - (centerY - transform.y) * (newScale / oldScale);
+            transform.x = centerX - (centerX - transform.x) * (newScale / transform.scale);
+            transform.y = centerY - (centerY - transform.y) * (newScale / transform.scale);
             transform.scale = newScale;
-
             clampTransform();
-            requestAnimationFrame(draw);
             return;
         }
 
         const pos = getCanvasPos(e);
-        const { clientX, clientY } = getEventPos(e);
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
 
         if (isInBounds(pos.x, pos.y)) {
             mouseCoord = { x: Math.round(pos.x), y: Math.round(pos.y) };
-            sync("cursor", {
-                x: pos.x,
-                y: pos.y,
-                username,
-                color,
-                isDrawing,
-                isVIP,
-                isRainbow,
-                isGhost,
-            });
-
-            // VIP Particle Trail locally
-            if (isVIP) {
-                spawnVIPTrial(pos.x, pos.y, "#fbbf24");
-                if (isDrawing) spawnSparkle(pos.x, pos.y);
-            }
+            sync("cursor", { x: pos.x, y: pos.y, username, color, isDrawing, isVIP, isRainbow, isGhost });
+            if (isVIP) spawnVIPTrial(pos.x, pos.y, "#fbbf24");
         } else {
             mouseCoord = null;
         }
 
         if (isPanning) {
-            const dx = clientX - lastPos.x;
-            const dy = clientY - lastPos.y;
-            transform.x += dx;
-            transform.y += dy;
+            transform.x += clientX - lastPos.x;
+            transform.y += clientY - lastPos.y;
             lastPos = { x: clientX, y: clientY };
             clampTransform();
-            requestAnimationFrame(draw);
-        } else if (isDrawing) {
+        } else if (isDrawing && currentStroke) {
             if (isInBounds(pos.x, pos.y)) {
                 currentStroke.points.push(pos);
                 pixelCount += Math.ceil(brushSize / 4);
                 sync("stroke_update", { id: currentStroke.id, point: pos });
+                if (isVIP) spawnSparkle(pos.x, pos.y);
             }
-            requestAnimationFrame(draw);
-        }
-    }
-
-    function spawnVIPTrial(x, y, tint) {
-        vipTrails.push({
-            x,
-            y,
-            life: 30,
-            color: tint,
-            size: Math.random() * 5 + 2,
-        });
-        if (vipTrails.length > 100) vipTrails.shift();
-        requestAnimationFrame(draw);
-    }
-
-    function spawnSparkle(x, y) {
-        for (let i = 0; i < 2; i++) {
-            sparkles.push({
-                x,
-                y,
-                vx: (Math.random() - 0.5) * 5,
-                vy: (Math.random() - 0.5) * 5,
-                life: 40 + Math.random() * 20,
-                size: Math.random() * 4 + 2,
-                color: "#fff",
-            });
         }
     }
 
@@ -244,95 +155,31 @@
         isPanning = false;
         isDrawing = false;
         currentStroke = null;
-        requestAnimationFrame(draw);
     }
 
     function handleWheel(e) {
         e.preventDefault();
-        const zoomSpeed = 0.0015;
-        const delta = -e.deltaY;
-        zoom(delta * zoomSpeed, e.clientX, e.clientY);
-    }
-
-    export function zoomIn() {
-        zoom(0.3, window.innerWidth / 2, window.innerHeight / 2);
-    }
-    export function zoomOut() {
-        zoom(-0.3, window.innerWidth / 2, window.innerHeight / 2);
-    }
-
-    function zoom(factor, centerX, centerY) {
-        const oldScale = transform.scale;
-        let newScale = oldScale * (1 + factor);
-        const minScale = getMinScale();
-        newScale = Math.min(Math.max(newScale, minScale), 8);
-
+        const factor = e.deltaY > 0 ? 0.9 : 1.1;
+        const newScale = Math.min(Math.max(transform.scale * factor, getMinScale()), 8);
         const rect = canvas.getBoundingClientRect();
-        const mouseX = centerX - rect.left;
-        const mouseY = centerY - rect.top;
-
-        transform.x = mouseX - (mouseX - transform.x) * (newScale / oldScale);
-        transform.y = mouseY - (mouseY - transform.y) * (newScale / oldScale);
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+        transform.x = mouseX - (mouseX - transform.x) * (newScale / transform.scale);
+        transform.y = mouseY - (mouseY - transform.y) * (newScale / transform.scale);
         transform.scale = newScale;
-
         clampTransform();
-        requestAnimationFrame(draw);
     }
 
-    function save() {
-        localStorage.setItem("canvas_strokes_v6", JSON.stringify(strokes));
-        localStorage.setItem("canvas_ads_v6", JSON.stringify(ads));
+    function spawnVIPTrial(x, y, tint) {
+        vipTrails.push({ x, y, life: 30, color: tint, size: Math.random() * 5 + 2 });
+        if (vipTrails.length > 50) vipTrails.shift();
     }
 
-    function load() {
-        const s = localStorage.getItem("canvas_strokes_v6");
-        const a = localStorage.getItem("canvas_ads_v6");
-        const p = localStorage.getItem("pixel_count_v3");
-        if (s) strokes = JSON.parse(s);
-        if (a) ads = JSON.parse(a);
-        if (p) pixelCount = parseInt(p);
-    }
-
-    function sync(type, data) {
-        channel.postMessage({ type, data });
-    }
-
-    function triggerNuke(x, y) {
-        if (!isVIP) return;
-        const radius = 350;
-        strokes = strokes.filter(
-            (s) => !s.points.some((p) => Math.hypot(p.x - x, p.y - y) < radius),
-        );
-        sync("nuke", { x, y, radius });
-        spawnAtomicEffect(x, y);
-        triggerShake(1.5);
-        save();
-    }
-
-    function triggerBurst(x, y) {
-        if (!isVIP) return;
-        sync("confetti", { x, y, isVIP: true, mega: true });
-        spawnConfetti(x, y, true, true);
-        spawnShockwave(x, y, "#fbbf24", 500);
-        triggerShake(0.8);
-    }
-
-    function spawnAtomicEffect(x, y) {
-        // Flash
-        spawnShockwave(x, y, "#ffffff", 600);
-        // Fireball
-        spawnShockwave(x, y, "#ef4444", 400);
-
-        // Soot/Fire particles
-        for (let i = 0; i < 80; i++) {
-            particles.push({
-                x,
-                y,
-                vx: (Math.random() - 0.5) * 60,
-                vy: (Math.random() - 0.5) * 60 - 20,
-                color: Math.random() > 0.3 ? "#451a03" : "#f97316",
-                life: 150 + Math.random() * 50,
-                size: 15 + Math.random() * 10,
+    function spawnSparkle(x, y) {
+        for(let i=0; i<2; i++) {
+            sparkles.push({
+                x, y, vx: (Math.random() - 0.5) * 5, vy: (Math.random() - 0.5) * 5,
+                life: 40 + Math.random() * 20, size: Math.random() * 4 + 2
             });
         }
     }
@@ -341,9 +188,60 @@
         shockwaves.push({ x, y, r: 0, maxR, alpha: 1, color });
     }
 
+    function triggerNuke(x, y) {
+        const radius = 350;
+        strokes = strokes.filter(s => !s.points.some(p => Math.hypot(p.x - x, p.y - y) < radius));
+        sync("nuke", { x, y, radius });
+        spawnAtomicEffect(x, y);
+        triggerShake(1.5);
+        save();
+    }
+
+    function triggerBurst(x, y) {
+        sync("confetti", { x, y, isVIP: true, mega: true });
+        spawnConfetti(x, y, true, true);
+        spawnShockwave(x, y, "#fbbf24", 500);
+        triggerShake(0.8);
+    }
+
+    function spawnAtomicEffect(x, y) {
+        spawnShockwave(x, y, "#ffffff", 600);
+        spawnShockwave(x, y, "#ef4444", 400);
+        for(let i=0; i<80; i++) {
+            particles.push({
+                x, y, vx: (Math.random() - 0.5) * 60, vy: (Math.random() - 0.5) * 60 - 20,
+                color: Math.random() > 0.3 ? "#451a03" : "#f97316", life: 150 + Math.random() * 50, size: 15 + Math.random() * 10
+            });
+        }
+    }
+
+    function spawnConfetti(cx, cy, vip = false, mega = false) {
+        const count = mega ? 300 : (vip ? 150 : 40);
+        const colors = vip ? ["#fbbf24", "#f59e0b", "#ffffff"] : null;
+        for (let i = 0; i < count; i++) {
+            particles.push({
+                x: cx, y: cy,
+                vx: (Math.random() - 0.5) * (mega ? 60 : (vip ? 40 : 20)),
+                vy: (Math.random() - 0.5) * (mega ? 60 : (vip ? 40 : 20)) - (vip ? 25 : 15),
+                color: colors ? colors[Math.floor(Math.random() * colors.length)] : `hsl(${Math.random() * 360}, 80%, 60%)`,
+                life: (mega ? 200 : (vip ? 150 : 80)) + Math.random() * 40, size: (mega ? 12 : (vip ? 8 : 6)) + Math.random() * 10,
+            });
+        }
+    }
+
     function triggerShake(intensity = 1) {
         isShaking = intensity;
-        setTimeout(() => (isShaking = false), 500);
+        setTimeout(() => isShaking = false, 500);
+    }
+
+    function sync(type, data) { channel.postMessage({ type, data }); }
+    function save() {
+        localStorage.setItem("canvas_strokes_v6", JSON.stringify(strokes));
+        localStorage.setItem("canvas_ads_v6", JSON.stringify(ads));
+    }
+
+    export function resetView() {
+        transform = { x: canvas.width / 2, y: canvas.height / 2, scale: getMinScale() * 1.5 };
     }
 
     export function placeAdAuto(imageData) {
@@ -351,177 +249,81 @@
         const height = width * 0.7;
         const maxX = CANVAS_SIZE / 2 - width - 50;
         const maxY = CANVAS_SIZE / 2 - height - 50;
-        const x =
-            -CANVAS_SIZE / 2 +
-            50 +
-            Math.random() * (maxX + CANVAS_SIZE / 2 - 50);
-        const y =
-            -CANVAS_SIZE / 2 +
-            50 +
-            Math.random() * (maxY + CANVAS_SIZE / 2 - 50);
-
-        const newAd = {
-            x,
-            y,
-            width,
-            height,
-            image: imageData,
-            id: Math.random(),
-            username,
-            isVIP,
-        };
-        ads = [...ads, newAd];
+        const x = -CANVAS_SIZE / 2 + 50 + Math.random() * (maxX + CANVAS_SIZE / 2 - 50);
+        const y = -CANVAS_SIZE / 2 + 50 + Math.random() * (maxY + CANVAS_SIZE / 2 - 50);
+        const newAd = { x, y, width, height, image: imageData, id: Math.random(), username, isVIP };
+        ads.push(newAd);
         sync("new_ad", newAd);
         save();
-        sync("confetti", { x: x + width / 2, y: y + height / 2, isVIP });
-        spawnConfetti(x + width / 2, y + height / 2, isVIP);
-        dispatch("adPlaced");
-        requestAnimationFrame(draw);
+        spawnAtomicEffect(x + width/2, y + height/2);
     }
 
-    function spawnConfetti(cx, cy, vip = false, mega = false) {
-        const count = mega ? 300 : vip ? 150 : 40;
-        const colors = vip ? ["#fbbf24", "#f59e0b", "#ffffff"] : null;
-        for (let i = 0; i < count; i++) {
-            particles.push({
-                x: cx,
-                y: cy,
-                vx: (Math.random() - 0.5) * (mega ? 60 : vip ? 40 : 20),
-                vy:
-                    (Math.random() - 0.5) * (mega ? 60 : vip ? 40 : 20) -
-                    (vip ? 25 : 15),
-                color: colors
-                    ? colors[Math.floor(Math.random() * colors.length)]
-                    : `hsl(${Math.random() * 360}, 80%, 60%)`,
-                life: (mega ? 200 : vip ? 150 : 80) + Math.random() * 40,
-                size: (mega ? 12 : vip ? 8 : 6) + Math.random() * 10,
-            });
-        }
-        animateParticles();
-    }
+    onMount(() => {
+        ctx = canvas.getContext("2d");
+        const s = localStorage.getItem("canvas_strokes_v6");
+        const a = localStorage.getItem("canvas_ads_v6");
+        const p = localStorage.getItem("pixel_count_v3");
+        if (s) strokes = JSON.parse(s);
+        if (a) ads = JSON.parse(a);
+        if (p) pixelCount = parseInt(p);
 
-    function animateParticles() {
-        if (
-            particles.length === 0 &&
-            vipTrails.length === 0 &&
-            sparkles.length === 0 &&
-            shockwaves.length === 0
-        )
-            return;
-        particles = particles
-            .map((p) => ({
-                ...p,
-                x: p.x + p.vx,
-                y: p.y + p.vy,
-                vy: p.vy + 0.5,
-                life: p.life - 1,
-            }))
-            .filter((p) => p.life > 0);
-
-        vipTrails = vipTrails
-            .map((p) => ({ ...p, life: p.life - 1, size: p.size * 0.95 }))
-            .filter((p) => p.life > 0);
-
-        sparkles = sparkles
-            .map((s) => ({
-                ...s,
-                x: s.x + s.vx,
-                y: s.y + s.vy,
-                life: s.life - 1,
-                size: s.size * 0.98,
-            }))
-            .filter((s) => s.life > 0);
-
-        shockwaves = shockwaves
-            .map((s) => ({
-                ...s,
-                r: s.r + 20,
-                alpha: Math.max(0, 1 - s.r / s.maxR),
-            }))
-            .filter((s) => s.alpha > 0);
-
-        requestAnimationFrame(draw);
-        if (
-            particles.length > 0 ||
-            vipTrails.length > 0 ||
-            sparkles.length > 0 ||
-            shockwaves.length > 0
-        )
-            requestAnimationFrame(animateParticles);
-    }
-
-    setInterval(() => {
-        const now = Date.now();
-        remoteCursors.forEach((cursor, key) => {
-            if (now - cursor.timestamp > 3000) remoteCursors.delete(key);
+        window.addEventListener("resize", () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            clampTransform();
         });
-        dispatch("usersUpdate", Array.from(remoteCursors.values()));
-    }, 1000);
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        resetView();
 
-    channel.onmessage = (event) => {
-        const { type, data } = event.data;
-        if (type === "stroke_start") {
-            strokes = [...strokes, data];
-        } else if (type === "stroke_update") {
-            const s = strokes.find((s) => s.id === data.id);
-            if (s) {
-                s.points.push(data.point);
-                strokes = strokes;
-            }
-        } else if (type === "new_ad") {
-            ads = [...ads, data];
-        } else if (type === "cursor") {
-            remoteCursors.set(data.username, {
-                ...data,
-                timestamp: Date.now(),
-            });
-            dispatch("usersUpdate", Array.from(remoteCursors.values()));
-            if (data.isVIP) {
-                spawnVIPTrial(data.x, data.y, "#fbbf24");
-                if (data.isDrawing) spawnSparkle(data.x, data.y);
-            }
-        } else if (type === "confetti") {
-            spawnConfetti(data.x, data.y, data.isVIP, data.mega);
-            if (data.mega) {
-                spawnShockwave(data.x, data.y, "#fbbf24", 500);
-                triggerShake(0.8);
-            }
-        } else if (type === "nuke") {
-            const { x, y, radius } = data;
-            strokes = strokes.filter(
-                (s) =>
-                    !s.points.some(
-                        (p) => Math.hypot(p.x - x, p.y - y) < radius,
-                    ),
-            );
-            spawnAtomicEffect(x, y);
-            triggerShake(1.5);
-        } else if (type === "clear") {
-            strokes = [];
-            ads = [];
-            pixelCount = 0;
-            localStorage.removeItem("canvas_strokes_v6");
-            localStorage.removeItem("canvas_ads_v6");
-            localStorage.removeItem("pixel_count_v3");
-        }
-        requestAnimationFrame(draw);
-    };
+        const loop = () => {
+            time += 0.05;
+            rainbowHue = (rainbowHue + 2) % 360;
+            if (isRainbow && isDrawing && currentStroke) currentStroke.color = `hsl(${rainbowHue}, 100%, 50%)`;
+            
+            const now = Date.now();
+            particles = particles.map(p => ({ ...p, x: p.x + p.vx, y: p.y + p.vy, vy: p.vy + 0.5, life: p.life - 1 })).filter(p => p.life > 0);
+            vipTrails = vipTrails.map(p => ({ ...p, life: p.life - 1, size: p.size * 0.95 })).filter(p => p.life > 0);
+            sparkles = sparkles.map(s => ({ ...s, x: s.x + s.vx, y: s.y + s.vy, life: s.life - 1, size: s.size * 0.98 })).filter(s => s.life > 0);
+            shockwaves = shockwaves.map(s => ({ ...s, r: s.r + 20, alpha: Math.max(0, 1 - s.r / s.maxR) })).filter(s => s.alpha > 0);
+            
+            strokes = strokes.filter(s => !(s.isGhost && now - s.timestamp > 5000));
+            
+            draw();
+            requestAnimationFrame(loop);
+        };
+        requestAnimationFrame(loop);
 
-    const imageCache = new Map();
-    let time = 0;
-    let rainbowHue = 0;
-    let shockwaves = []; // Added shockwaves state variable
+        channel.onmessage = (e) => {
+            const { type, data } = e.data;
+            if (type === "stroke_start") strokes.push(data);
+            else if (type === "stroke_update") {
+                const s = strokes.find(s => s.id === data.id);
+                if (s) s.points.push(data.point);
+            } else if (type === "new_ad") ads.push(data);
+            else if (type === "cursor") {
+                remoteCursors.set(data.username, { ...data, timestamp: Date.now() });
+                onUsersUpdate?.(Array.from(remoteCursors.values()));
+            } else if (type === "confetti") {
+                spawnConfetti(data.x, data.y, data.isVIP, data.mega);
+                if (data.mega) { spawnShockwave(data.x, data.y, "#fbbf24", 500); triggerShake(0.8); }
+            } else if (type === "nuke") {
+                strokes = strokes.filter(s => !s.points.some(p => Math.hypot(p.x - data.x, p.y - data.y) < data.radius));
+                spawnAtomicEffect(data.x, data.y);
+                triggerShake(1.5);
+            } else if (type === "clear") {
+                strokes = []; ads = []; pixelCount = 0;
+                localStorage.removeItem("canvas_strokes_v6");
+                localStorage.removeItem("canvas_ads_v6");
+                localStorage.removeItem("pixel_count_v3");
+            }
+        };
+
+        return () => channel.close();
+    });
 
     function draw() {
         if (!ctx) return;
-        time += 0.05;
-        rainbowHue = (rainbowHue + 2) % 360;
-
-        // If local user is drawing in rainbow mode, update their color
-        if (isRainbow && isDrawing && currentStroke) {
-            currentStroke.color = `hsl(${rainbowHue}, 100%, 50%)`;
-        }
-
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.fillStyle = "#f8fafc";
@@ -530,253 +332,112 @@
         ctx.translate(transform.x, transform.y);
         ctx.scale(transform.scale, transform.scale);
 
-        // Canvas surface
+        // Surface
         ctx.fillStyle = "#ffffff";
         ctx.shadowBlur = 60 / transform.scale;
         ctx.shadowColor = "rgba(0,0,0,0.06)";
-        ctx.fillRect(
-            -CANVAS_SIZE / 2,
-            -CANVAS_SIZE / 2,
-            CANVAS_SIZE,
-            CANVAS_SIZE,
-        );
+        ctx.fillRect(-CANVAS_SIZE/2, -CANVAS_SIZE/2, CANVAS_SIZE, CANVAS_SIZE);
         ctx.shadowBlur = 0;
 
-        // Subtle grid
-        drawGrid();
+        // Grid
+        ctx.strokeStyle = "rgba(0,0,0,0.03)";
+        ctx.lineWidth = 1 / transform.scale;
+        ctx.beginPath();
+        for (let x = -CANVAS_SIZE/2; x <= CANVAS_SIZE/2; x += 100) { ctx.moveTo(x, -CANVAS_SIZE/2); ctx.lineTo(x, CANVAS_SIZE/2); }
+        for (let y = -CANVAS_SIZE/2; y <= CANVAS_SIZE/2; y += 100) { ctx.moveTo(-CANVAS_SIZE/2, y); ctx.lineTo(CANVAS_SIZE/2, y); }
+        ctx.stroke();
 
         // Ads
-        ads.forEach((ad) => {
-            if (ad.image) {
-                let img = imageCache.get(ad.image);
-                if (!img) {
-                    img = new Image();
-                    img.src = ad.image;
-                    img.onload = () => {
-                        imageCache.set(ad.image, img);
-                        requestAnimationFrame(draw);
-                    };
+        ads.forEach(ad => {
+            let img = imageCache.get(ad.image);
+            if (!img) {
+                img = new Image(); img.src = ad.image;
+                img.onload = () => imageCache.set(ad.image, img);
+            }
+            if (img?.complete) {
+                ctx.save();
+                ctx.beginPath(); ctx.roundRect(ad.x, ad.y, ad.width, ad.height, 12/transform.scale); ctx.clip();
+                ctx.drawImage(img, ad.x, ad.y, ad.width, ad.height);ctx.restore();
+                if (ad.isVIP) {
+                    ctx.strokeStyle = `hsl(45, 100%, ${50 + Math.sin(time)*20}%)`;
+                    ctx.lineWidth = 8/transform.scale;
+                    ctx.shadowBlur = 15/transform.scale; ctx.shadowColor = "#fbbf24";
+                } else {
+                    ctx.strokeStyle = "rgba(0,0,0,0.08)"; ctx.lineWidth = 1/transform.scale;
                 }
-                if (img.complete) {
-                    ctx.save();
-                    const r = 12 / transform.scale;
-                    ctx.beginPath();
-                    ctx.roundRect(ad.x, ad.y, ad.width, ad.height, r);
-                    ctx.clip();
-                    ctx.drawImage(img, ad.x, ad.y, ad.width, ad.height);
-                    ctx.restore();
-
-                    if (ad.isVIP) {
-                        // Animated Golden Border
-                        ctx.strokeStyle = `hsl(45, 100%, ${50 + Math.sin(time) * 20}%)`;
-                        ctx.lineWidth = 8 / transform.scale;
-                        ctx.shadowBlur = 15 / transform.scale;
-                        ctx.shadowColor = "#fbbf24";
-                    } else {
-                        ctx.strokeStyle = "rgba(0,0,0,0.08)";
-                        ctx.lineWidth = 1 / transform.scale;
-                    }
-                    ctx.stroke();
-                    ctx.shadowBlur = 0;
-                }
+                ctx.stroke(); ctx.shadowBlur = 0;
             }
         });
 
         // Strokes
         const now = Date.now();
-        strokes = strokes.filter((s) => {
-            if (s.isGhost && now - s.timestamp > 5000) return false;
-            return true;
-        });
-
-        strokes.forEach((stroke) => {
-            if (stroke.points.length < 2) return;
+        strokes.forEach(s => {
+            if (s.points.length < 2) return;
             ctx.beginPath();
-            ctx.lineWidth = stroke.width;
-            ctx.strokeStyle = stroke.color;
-
-            if (stroke.isVIP) {
-                ctx.shadowBlur = (stroke.isRainbow ? 8 : 4) / transform.scale;
-                ctx.shadowColor = stroke.color;
-            }
-
-            if (stroke.isGhost) {
-                const age = now - stroke.timestamp;
-                ctx.globalAlpha = Math.max(0, 1 - age / 5000);
-            }
-
-            ctx.lineCap = "round";
-            ctx.lineJoin = "round";
-            ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
-            for (let i = 1; i < stroke.points.length; i++)
-                ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
-            ctx.stroke();
-            ctx.shadowBlur = 0;
-            ctx.globalAlpha = 1;
-        });
-
-        // VIP Trails
-        vipTrails.forEach((p) => {
-            ctx.globalAlpha = p.life / 30;
-            ctx.fillStyle = p.color;
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, p.size / transform.scale, 0, Math.PI * 2);
-            ctx.fill();
-        });
-
-        // Sparkles
-        sparkles.forEach((s) => {
-            ctx.globalAlpha = s.life / 60;
-            ctx.fillStyle = "#fff";
-            ctx.shadowBlur = 10 / transform.scale;
-            ctx.shadowColor = "#fbbf24";
-            ctx.beginPath();
-            // Draw a diamond/star shape for sparkle
-            const r = s.size / transform.scale;
-            ctx.moveTo(s.x, s.y - r);
-            ctx.lineTo(s.x + r, s.y);
-            ctx.lineTo(s.x, s.y + r);
-            ctx.lineTo(s.x - r, s.y);
-            ctx.closePath();
-            ctx.fill();
-            ctx.shadowBlur = 0;
-        });
-        ctx.globalAlpha = 1;
-
-        // Shockwaves
-        shockwaves.forEach((s) => {
-            ctx.globalAlpha = s.alpha;
+            ctx.lineWidth = s.width;
             ctx.strokeStyle = s.color;
-            ctx.lineWidth = 15 / transform.scale;
-            ctx.beginPath();
-            ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
-            ctx.stroke();
+            if (s.isVIP) { ctx.shadowBlur = (s.isRainbow ? 8 : 4)/transform.scale; ctx.shadowColor = s.color; }
+            if (s.isGhost) ctx.globalAlpha = Math.max(0, 1 - (now - s.timestamp)/5000);
+            ctx.lineCap = "round"; ctx.lineJoin = "round";
+            ctx.moveTo(s.points[0].x, s.points[0].y);
+            for(let i=1; i<s.points.length; i++) ctx.lineTo(s.points[i].x, s.points[i].y);
+            ctx.stroke(); ctx.shadowBlur = 0; ctx.globalAlpha = 1;
         });
+
+        // VFX
+        vipTrails.forEach(p => { ctx.globalAlpha = p.life/30; ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, p.size/transform.scale, 0, Math.PI*2); ctx.fill(); });
+        sparkles.forEach(s => {
+            ctx.globalAlpha = s.life/60; ctx.fillStyle = "#fff"; ctx.shadowBlur = 10/transform.scale; ctx.shadowColor = "#fbbf24";
+            const r = s.size/transform.scale;
+            ctx.beginPath(); ctx.moveTo(s.x, s.y-r); ctx.lineTo(s.x+r, s.y); ctx.lineTo(s.x, s.y+r); ctx.lineTo(s.x-r, s.y); ctx.fill(); ctx.shadowBlur = 0;
+        });
+        shockwaves.forEach(s => {
+            ctx.globalAlpha = s.alpha; ctx.strokeStyle = s.color; ctx.lineWidth = 15/transform.scale;
+            ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI*2); ctx.stroke();
+        });
+        particles.forEach(p => { ctx.globalAlpha = Math.min(p.life/50, 1); ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, p.size/transform.scale, 0, Math.PI*2); ctx.fill(); });
         ctx.globalAlpha = 1;
 
-        // Minimal Remote Cursors
-        remoteCursors.forEach((cursor) => {
-            if (cursor.username === username) return;
-
-            const dotSize = (cursor.isVIP ? 6 : 4) / transform.scale;
-
-            if (cursor.isVIP) {
-                // VIP Aura
-                ctx.beginPath();
-                ctx.arc(cursor.x, cursor.y, dotSize * 2.5, 0, Math.PI * 2);
-                const grad = ctx.createRadialGradient(
-                    cursor.x,
-                    cursor.y,
-                    0,
-                    cursor.x,
-                    cursor.y,
-                    dotSize * 2.5,
-                );
-                grad.addColorStop(0, "rgba(251, 191, 36, 0.4)");
-                grad.addColorStop(1, "rgba(251, 191, 36, 0)");
-                ctx.fillStyle = grad;
-                ctx.fill();
+        // Cursors
+        remoteCursors.forEach(c => {
+            if (c.username === username) return;
+            const dot = (c.isVIP ? 6 : 4)/transform.scale;
+            if (c.isVIP) {
+                ctx.beginPath(); ctx.arc(c.x, c.y, dot*2.5, 0, Math.PI*2);
+                const g = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, dot*2.5);
+                g.addColorStop(0, "rgba(251, 191, 36, 0.4)"); g.addColorStop(1, "rgba(251, 191, 36, 0)");
+                ctx.fillStyle = g; ctx.fill();
             }
-
-            ctx.beginPath();
-            ctx.arc(cursor.x, cursor.y, dotSize, 0, Math.PI * 2);
-            ctx.fillStyle = cursor.isVIP
-                ? "#fbbf24"
-                : cursor.color || "#3b82f6";
-            ctx.fill();
-
-            // Mini Label
-            ctx.font = `${(cursor.isVIP ? 12 : 10) / transform.scale}px "Inter", sans-serif`;
-            const label = cursor.username + (cursor.isVIP ? " ✨" : "");
-            const textWidth = ctx.measureText(label).width;
-            const padding = 6 / transform.scale;
-
-            ctx.fillStyle = cursor.isVIP
-                ? "rgba(251, 191, 36, 0.95)"
-                : "rgba(15, 23, 42, 0.85)";
-            const lx = cursor.x + 8 / transform.scale;
-            const ly = cursor.y - 14 / transform.scale;
-            ctx.beginPath();
-            ctx.roundRect(
-                lx,
-                ly,
-                textWidth + padding * 2,
-                (cursor.isVIP ? 18 : 16) / transform.scale,
-                4 / transform.scale,
-            );
-            ctx.fill();
-
-            ctx.fillStyle = cursor.isVIP ? "#000" : "#ffffff";
-            ctx.fillText(
-                label,
-                lx + padding,
-                ly + (cursor.isVIP ? 13 : 11.5) / transform.scale,
-            );
+            ctx.beginPath(); ctx.arc(c.x, c.y, dot, 0, Math.PI*2); ctx.fillStyle = c.isVIP ? "#fbbf24" : (c.color || "#3b82f6"); ctx.fill();
+            ctx.font = `${(c.isVIP ? 12 : 10)/transform.scale}px "Inter"`;
+            const txt = c.username + (c.isVIP ? " ✨" : "");
+            const tw = ctx.measureText(txt).width;
+            ctx.fillStyle = c.isVIP ? "rgba(251,191,36,0.95)" : "rgba(15,23,42,0.85)";
+            ctx.beginPath(); ctx.roundRect(c.x+8/transform.scale, c.y-14/transform.scale, tw + 12/transform.scale, (c.isVIP ? 18 : 16)/transform.scale, 4/transform.scale); ctx.fill();
+            ctx.fillStyle = c.isVIP ? "#000" : "#fff"; ctx.fillText(txt, c.x + 14/transform.scale, c.y-1/transform.scale);
         });
-
-        // Particles
-        particles.forEach((p) => {
-            ctx.fillStyle = p.color;
-            ctx.globalAlpha = Math.min(p.life / 50, 1);
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, p.size / transform.scale, 0, Math.PI * 2);
-            ctx.fill();
-        });
-        ctx.globalAlpha = 1;
     }
-
-    function drawGrid() {
-        ctx.strokeStyle = "rgba(0,0,0,0.03)";
-        ctx.lineWidth = 1 / transform.scale;
-        ctx.beginPath();
-        for (let x = -CANVAS_SIZE / 2; x <= CANVAS_SIZE / 2; x += 100) {
-            ctx.moveTo(x, -CANVAS_SIZE / 2);
-            ctx.lineTo(x, CANVAS_SIZE / 2);
-        }
-        for (let y = -CANVAS_SIZE / 2; y <= CANVAS_SIZE / 2; y += 100) {
-            ctx.moveTo(-CANVAS_SIZE / 2, y);
-            ctx.lineTo(CANVAS_SIZE / 2, y);
-        }
-        ctx.stroke();
-    }
-
-    function resize() {
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-        clampTransform();
-        requestAnimationFrame(draw);
-    }
-
-    onMount(() => {
-        load();
-        ctx = canvas.getContext("2d");
-        window.addEventListener("resize", resize);
-        resize();
-        transform = {
-            x: canvas.width / 2,
-            y: canvas.height / 2,
-            scale: getMinScale() * 1.5,
-        };
-        requestAnimationFrame(draw);
-        return () => {
-            window.removeEventListener("resize", resize);
-            channel.close();
-        };
-    });
 </script>
 
 <canvas
     bind:this={canvas}
     class:shaking={isShaking !== false}
-    on:mousedown={handlePointerDown}
-    on:mousemove={handlePointerMove}
-    on:mouseup={handlePointerUp}
-    on:mouseleave={handlePointerUp}
-    on:touchstart|preventDefault={handlePointerDown}
-    on:touchmove|preventDefault={handlePointerMove}
-    on:touchend={handlePointerUp}
-    on:wheel={handleWheel}
-    on:contextmenu|preventDefault
+    intensity={isShaking || 0}
+    onmousedown={handlePointerDown}
+    onmousemove={handlePointerMove}
+    onmouseup={handlePointerUp}
+    onmouseleave={handlePointerUp}
+    ontouchstart={(e) => {
+        e.preventDefault();
+        handlePointerDown(e);
+    }}
+    ontouchmove={(e) => {
+        e.preventDefault();
+        handlePointerMove(e);
+    }}
+    ontouchend={handlePointerUp}
+    onwheel={handleWheel}
+    oncontextmenu={(e) => e.preventDefault()}
 ></canvas>
 
 <style>
@@ -788,15 +449,9 @@
         cursor: crosshair;
         touch-action: none;
     }
-
     .shaking {
         animation: shake 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
     }
-
-    .shaking[intensity="1.5"] {
-        animation: shake 0.6s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
-    }
-
     @keyframes shake {
         10%,
         90% {
@@ -813,7 +468,7 @@
         }
         40%,
         60% {
-            transform: translate3d(4px, 0, 0);
+            transform: translate3d(4px, -1px, 0);
         }
     }
 </style>
