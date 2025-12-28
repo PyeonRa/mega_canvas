@@ -1,61 +1,323 @@
-# MEGA CANVAS | Development Walkthrough
+# Mega Canvas - 프로젝트 Walkthrough
 
-Welcome to the internal development guide for **Mega Canvas**. This document tracks the evolution of our real-time multiplayer doodle engine.
+## 📋 프로젝트 개요
 
----
+**Mega Canvas**는 실시간 협업 드로잉 캔버스 웹 애플리케이션입니다. 여러 사용자가 동시에 하나의 거대한 캔버스에 그림을 그리고, 채팅하며, 다양한 이펙트를 사용할 수 있습니다.
 
-## 🚀 Core Technology Stack
-- **Frontend**: Svelte 5 (Runes) + Vite
-- **Backend**: Node.js + Express + Socket.IO
-- **Communication**: Bidirectional Socket.IO for real-time synchronization
-- **Graphics**: HTML5 Canvas API with transformation matrix logic
-
----
-
-## 🎨 Design Philosophy: "Modern & Airy"
-Mega Canvas follows a **Premium Light Theme** aesthetic:
-- **Frosted Glass (Glassmorphism)**: All UI elements use semi-transparent white backgrounds with high-blur backdrops.
-- **Airy Palette**: Transitioned from a heavy dark theme to a clean #F1F5F9 foundation with subtle shadows.
-- **Micro-Animations**: Smooth GPU-accelerated transitions for modals, sidebars, and chat.
-- **Mobile-First**: Fully responsive Smart Dock and side-drawers for touch devices.
+### 기술 스택
+| 영역 | 기술 |
+|------|------|
+| **Frontend** | Svelte 5 + Vite 7 |
+| **Backend** | Express.js + Socket.IO |
+| **실시간 통신** | WebSocket (Socket.IO) |
+| **스타일링** | Vanilla CSS (Glassmorphism 디자인) |
 
 ---
 
-## � Features & Capabilities
+## 🏗️ 프로젝트 구조
 
-### 1. Advanced Drawing Engine
-- **Infinite Resolution Logic**: Seamless zooming and panning using matrix transformations.
-- **Pressure-Simulated Strokes**: Adjustable brush sizes with smooth line-joining and capping.
-- **Surgical Nuke**: A nuke weapon that intelligently splits lines instead of just deleting them, maintaining part of the artwork.
-
-### 2. Real-Time Collaborative Environment
-- **Multi-User Sync**: Instantly see other users' cursors, strokes, and stickers.
-- **Secure Live Chat**: Integrated real-time chat with Svelte-native XSS/Injection protection.
-- **Online Presence**: Sidebar showing all active artists with VIP status indicators.
-
-### 3. Progressive Visual Effects (VFX)
-- **Subtle Feedback**: Polished ripples and floating EXP (pixel gain) numbers that provide juice without cluttering the view.
-- **Magical Tools**: Includes a 'Magic Sparkler' that creates temporary fizzling particles.
-- **Cinematic Events**: Screen-flash effects and globally synchronized milestone celebrations (+1,000px).
-
-### 4. Monetization & Engagement (Mockup)
-- **VIP Prestige**: Specialized tools like Rainbow Mode, Ghost Ink, and Mega Burst.
-- **Media Assets**: Integrated system for users to 'stamp' emojis or upload image ads to the canvas.
-
----
-
-## � Security & Performance
-- **Injection Defense**: Server-side structure validation for chat and strokes.
-- **VFX Optimization**: Strict particle pooling and lifecycle management to maintain 60 FPS on mobile.
-- **Viewport Locking**: Prevented browser-level zooming to ensure drawing precision on mobile.
+```
+somethin2/
+├── server.js              # 백엔드 서버 (Socket.IO)
+├── src/
+│   ├── App.svelte         # 메인 앱 컴포넌트
+│   ├── main.js            # 앱 진입점
+│   ├── app.css            # 전역 스타일
+│   └── lib/
+│       ├── Canvas.svelte  # 핵심 캔버스 컴포넌트 (1000+ lines)
+│       ├── Chat.svelte    # 실시간 채팅 컴포넌트
+│       ├── Header.svelte  # 상단 네비게이션
+│       ├── Toolbar.svelte # 드로잉 도구 패널
+│       ├── Sidebar.svelte # 온라인 유저 사이드바
+│       ├── Modals.svelte  # 모달 다이얼로그 모음
+│       └── state.svelte.js # 전역 상태 관리
+├── index.html             # HTML 템플릿
+├── package.json           # 프로젝트 의존성
+├── vite.config.js         # Vite 설정
+└── svelte.config.js       # Svelte 설정
+```
 
 ---
 
-## 📍 Developer Notes
-- **CORS**: Currently set to `*` for development ease. Must be restricted for production.
-- **State Persistence**: Local storage is used for nicknames and VIP status.
-- **Scale Management**: Transformation logic is handled in `Canvas.svelte` via the `transform` state.
+## 🔑 핵심 컴포넌트 상세
+
+### 1. `App.svelte` - 메인 애플리케이션
+애플리케이션의 루트 컴포넌트로, 전체 상태를 관리하고 하위 컴포넌트를 조합합니다.
+
+**주요 상태:**
+- `color` - 현재 브러시 색상
+- `brushSize` - 브러시 크기
+- `mode` - 현재 도구 모드 (draw, pan, stamp, sparkle, nuke 등)
+- `username` - 사용자 닉네임
+- `isVIP` - VIP 상태 (프리미엄 기능 활성화)
+- `isDarkMode` - 다크모드 토글
+- `onlineUsers` - 온라인 사용자 목록
+
+**색상 팔레트:**
+총 18가지 미리 정의된 색상 제공
 
 ---
 
-*Updated: Dec 2025*
+### 2. `Canvas.svelte` - 핵심 캔버스 엔진
+가장 복잡한 컴포넌트로, 실시간 드로잉 기능의 핵심입니다.
+
+**주요 기능:**
+| 기능 | 설명 |
+|------|------|
+| **Draw** | 기본 브러시 드로잉 |
+| **Pan** | 캔버스 이동 (중클릭/우클릭) |
+| **Stamp** | 이모지 스탬프 찍기 🔥💎✨🌈 |
+| **Sparkle** | 마법 스파클러 효과 |
+| **Nuke** | 원형 범위 삭제 (VIP 전용) |
+
+**이벤트 처리:**
+- `handlePointerDown` - 마우스/터치 시작
+- `handlePointerMove` - 드래그/드로잉
+- `handlePointerUp` - 드로잉 종료
+- `handleWheel` - 줌 인/아웃
+
+**시각 효과:**
+- `spawnConfetti()` - 폭죽 효과
+- `spawnRipple()` - 물결 효과
+- `triggerNuke()` - 폭발 효과
+- `spawnScreenShake()` - 화면 흔들림
+
+**Socket.IO 이벤트:**
+```javascript
+socket.emit("stroke_start", data)  // 드로잉 시작
+socket.emit("stroke_update", data) // 드로잉 업데이트
+socket.emit("new_stamp", data)     // 스탬프 추가
+socket.emit("cursor", data)        // 커서 위치 공유
+socket.emit("nuke", data)          // Nuke 이벤트
+```
+
+---
+
+### 3. `Chat.svelte` - 실시간 채팅
+Socket.IO를 통한 실시간 멀티플레이어 채팅 기능입니다.
+
+**주요 기능:**
+- 실시간 메시지 송수신
+- 읽지 않은 메시지 배지 표시
+- 자동 스크롤
+- VIP 사용자 표시 (✨)
+- 시스템 메시지 지원
+
+**Socket 이벤트:**
+```javascript
+socket.on("chat_message", handleMsg)  // 메시지 수신
+socket.on("init", handleInit)         // 초기 채팅 히스토리 로드
+socket.emit("chat_message", {...})    // 메시지 전송
+```
+
+---
+
+### 4. `Toolbar.svelte` - 도구 패널
+화면 하단의 도킹 스타일 툴바입니다.
+
+**도구 그룹:**
+1. **모드 선택** - Draw, Pan, Stamp, Sparkle
+2. **색상 선택** - 컬러 피커 + 팔레트
+3. **브러시 크기** - 1-50px 슬라이더
+4. **VIP 도구** - Rainbow 모드, Ghost 모드, Nuke
+5. **액션** - 이미지 업로드, 캔버스 클리어
+
+---
+
+### 5. `Header.svelte` - 상단 네비게이션
+브랜드 로고, 통계, 사용자 액션을 표시합니다.
+
+**표시 정보:**
+- 마우스 좌표 (X, Y)
+- 기여 픽셀 수
+- 온라인 사용자 수
+- VIP 업그레이드 버튼
+- 다크모드 토글
+
+---
+
+### 6. `Modals.svelte` - 모달 다이얼로그
+3가지 주요 모달을 관리합니다.
+
+| 모달 | 용도 |
+|------|------|
+| **Nickname Modal** | 초기 닉네임 설정 |
+| **Ad/Media Modal** | 이미지 업로드 및 캔버스 동기화 |
+| **Shop Modal** | VIP 업그레이드 (Prestige Marketplace) |
+
+---
+
+### 7. `Sidebar.svelte` - 온라인 유저 패널
+현재 접속 중인 사용자 목록을 표시합니다.
+
+**표시 정보:**
+- 사용자 이름
+- 사용자 색상
+- VIP 상태
+- 기여 픽셀 수
+
+---
+
+### 8. `state.svelte.js` - 전역 상태
+Socket.IO 연결을 전역적으로 관리하는 싱글톤 클래스입니다.
+
+```javascript
+class GlobalState {
+    socket = $state(null);
+    onlineUsers = $state([]);
+    
+    connect() {
+        this.socket = io({
+            reconnection: true,
+            reconnectionAttempts: 10,
+            timeout: 10000,
+            autoConnect: true
+        });
+    }
+}
+```
+
+---
+
+## 🖥️ 백엔드 서버 (`server.js`)
+
+Express + Socket.IO 기반의 실시간 서버입니다.
+
+**메모리 저장소:**
+```javascript
+let strokes = [];      // 모든 드로잉 스트로크
+let ads = [];          // 업로드된 이미지
+let stamps = [];       // 이모지 스탬프
+let chatHistory = [];  // 채팅 히스토리 (최대 50개)
+```
+
+**Socket 이벤트 핸들러:**
+| 이벤트 | 설명 |
+|--------|------|
+| `connection` | 사용자 연결 & 초기 상태 전송 |
+| `stroke_start` | 새 스트로크 시작 |
+| `stroke_update` | 스트로크 포인트 추가 |
+| `new_ad` | 이미지 브로드캐스트 |
+| `new_stamp` | 스탬프 브로드캐스트 |
+| `cursor` | 커서 위치 공유 |
+| `confetti/ripple/sparkler` | 이펙트 브로드캐스트 |
+| `nuke` | 범위 삭제 처리 |
+| `chat_message` | 채팅 메시지 처리 |
+| `clear` | 캔버스 완전 초기화 |
+| `disconnect` | 사용자 연결 해제 |
+
+---
+
+## 🚀 실행 방법
+
+### 1. 의존성 설치
+```bash
+npm install
+```
+
+### 2. 백엔드 서버 실행
+```bash
+npm run backend
+# 또는
+node server.js
+```
+서버가 `http://localhost:3001`에서 실행됩니다.
+
+### 3. 프론트엔드 개발 서버 실행
+```bash
+npm run dev
+```
+개발 서버가 Vite를 통해 실행됩니다 (기본: `http://localhost:5173`).
+
+### 4. 프로덕션 빌드
+```bash
+npm run build
+npm run preview
+```
+
+---
+
+## 💡 주요 기능 요약
+
+### 기본 기능
+- ✏️ **실시간 드로잉** - 여러 사용자가 동시에 그림 그리기
+- 🖼️ **이미지 업로드** - 캔버스에 이미지 삽입
+- 🎨 **이모지 스탬프** - 랜덤 이모지 스탬프 찍기
+- 💬 **실시간 채팅** - 다른 아티스트들과 소통
+- 👥 **온라인 유저 확인** - 접속 중인 사용자 목록
+
+### VIP 전용 기능
+- 🌈 **Rainbow Mode** - 무지개 색상으로 자동 변경
+- 👻 **Ghost Mode** - 투명 드로잉
+- ☢️ **Nuke** - 원형 범위 삭제 (쿨다운 있음)
+
+### UI/UX 기능
+- 🌙 **다크모드** 지원
+- 📱 **반응형 디자인** - 모바일 최적화
+- 🔍 **줌 인/아웃** - 마우스 휠 또는 버튼
+- 🎆 **시각 효과** - Confetti, Ripple, Screen Shake
+
+---
+
+## 📝 로컬 저장소 키
+
+| 키 | 용도 |
+|----|------|
+| `canvas_user_v7` | 저장된 사용자 닉네임 |
+| `canvas_is_vip_v1` | VIP 상태 |
+| `theme_v7` | 테마 설정 (light/dark) |
+| `canvas_strokes_v8` | 로컬 스트로크 백업 |
+| `canvas_ads_v8` | 로컬 이미지 백업 |
+| `canvas_stamps_v8` | 로컬 스탬프 백업 |
+
+---
+
+## 🔧 설정 파일
+
+### `vite.config.js`
+```javascript
+import { defineConfig } from 'vite'
+import { svelte } from '@sveltejs/vite-plugin-svelte'
+
+export default defineConfig({
+  plugins: [svelte()],
+})
+```
+
+### `svelte.config.js`
+```javascript
+import { vitePreprocess } from '@sveltejs/vite-plugin-svelte'
+
+export default {
+  preprocess: vitePreprocess()
+}
+```
+
+---
+
+## 🎨 디자인 시스템
+
+### CSS 변수 (Light Mode)
+```css
+--bg-app: #f1f5f9;
+--text-main: #1e293b;
+--text-muted: #64748b;
+--glass-bg: rgba(255, 255, 255, 0.8);
+--glass-border: rgba(0, 0, 0, 0.05);
+--glass-shadow: rgba(0, 0, 0, 0.08);
+--accent: #2563eb;
+```
+
+### CSS 변수 (Dark Mode)
+```css
+--bg-app: #0f172a;
+--text-main: #f8fafc;
+--text-muted: #94a3b8;
+--glass-bg: rgba(15, 23, 42, 0.8);
+--glass-border: rgba(255, 255, 255, 0.1);
+--glass-shadow: rgba(0, 0, 0, 0.4);
+```
+
+---
+
+*마지막 업데이트: 2025년 12월 29일*
