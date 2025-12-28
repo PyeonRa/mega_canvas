@@ -1,6 +1,7 @@
 <script>
     import { onMount } from "svelte";
     import { io } from "socket.io-client";
+    import { globalState } from "./state.svelte.js";
 
     let {
         color = "#2563eb",
@@ -14,7 +15,6 @@
         pixelCount = $bindable(0),
         onUsersUpdate,
         nukeCooldown = $bindable(0),
-        socket = $bindable(),
         isDarkMode = false,
     } = $props();
 
@@ -451,7 +451,8 @@
     function sync(type, data) {
         // Svelte 5 state proxies cannot be cloned for BroadcastChannel
         const cleanData = JSON.parse(JSON.stringify(data));
-        if (socket?.connected) socket.emit(type, cleanData);
+        if (globalState.socket?.connected)
+            globalState.socket.emit(type, cleanData);
         channel.postMessage({ type, data: cleanData });
     }
 
@@ -512,21 +513,9 @@
         }
 
         try {
-            // Intelligent Server URL Detection
-            const isLocal =
-                window.location.hostname === "localhost" ||
-                window.location.hostname === "127.0.0.1";
-            const serverUrl = isLocal
-                ? `http://${window.location.hostname}:3001`
-                : window.location.origin;
+            globalState.connect();
+            const socket = globalState.socket;
 
-            socket = io(serverUrl, {
-                transports: ["polling", "websocket"], // Crucial for cloud proxies
-                reconnection: true,
-                reconnectionAttempts: 10,
-                timeout: 10000,
-                autoConnect: true,
-            });
             socket.on("connect", () =>
                 console.log("✅ Synced to Global Board"),
             );
@@ -679,7 +668,7 @@
         requestAnimationFrame(loop);
 
         channel.onmessage = (e) => {
-            if (socket?.connected) return;
+            if (globalState.socket?.connected) return;
             const { type, data } = e.data;
             if (type === "stroke_start") strokes.push(data);
             else if (type === "stroke_update") {
@@ -722,7 +711,6 @@
 
         return () => {
             window.removeEventListener("resize", handleResize);
-            socket?.disconnect();
             channel.close();
         };
     });

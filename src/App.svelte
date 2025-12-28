@@ -132,7 +132,6 @@
     bind:mouseCoord
     bind:pixelCount
     bind:nukeCooldown
-    bind:socket
     {isDarkMode}
     onUsersUpdate={(users) => (onlineUsers = users)}
   />
@@ -171,7 +170,7 @@
     {nukeCooldown}
   />
 
-  <Chat {socket} {username} {color} {isVIP} />
+  <Chat {username} {color} {isVIP} />
 
   <div class="floating-zoom">
     <button onclick={() => canvasRef.zoomIn()}>+</button>

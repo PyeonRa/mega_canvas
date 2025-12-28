@@ -1,29 +1,33 @@
 <script>
     import { onMount, tick } from "svelte";
+    import { globalState } from "./state.svelte.js";
 
-    let { socket, username, color, isVIP } = $props();
+    let { username, color, isVIP } = $props();
 
     let messages = $state([]);
     let newMessage = $state("");
     let isOpen = $state(false);
     let scrollContainer = $state();
     let unreadCount = $state(0);
+    $inspect(socket);
 
     // Listen for messages from the socket
     $effect(() => {
+        const socket = globalState.socket;
         if (!socket) return;
 
         const handleMsg = (msg) => {
             console.log("📨 Chat UI Receiving:", msg);
-            messages.push(msg);
-            if (messages.length > 50) messages.splice(0, messages.length - 50);
+            // Re-assignment is the most robust way to trigger reactivity in all Svelte versions
+            messages = [...messages, msg];
+            if (messages.length > 50) messages = messages.slice(-50);
             if (!isOpen) unreadCount++;
             scrollToBottom();
         };
 
         const handleInit = (data) => {
             if (data.chatHistory) {
-                messages.splice(0, messages.length, ...data.chatHistory);
+                messages = [...data.chatHistory];
                 scrollToBottom();
             }
         };
@@ -62,6 +66,7 @@
     }
 
     function sendMessage() {
+        const socket = globalState.socket;
         if (!newMessage.trim() || !socket) return;
 
         socket.emit("chat_message", {
